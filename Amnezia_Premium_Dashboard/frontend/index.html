@@ -1,0 +1,255 @@
+<!DOCTYPE html>
+<html lang="ru">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SkyKnight VPN — Premium</title>
+    <link rel="stylesheet" href="style.css">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link
+        href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;700&family=JetBrains+Mono:wght@400;500&display=swap"
+        rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/apexcharts"></script>
+</head>
+
+<body>
+
+    <!-- ============ LOGIN SCREEN ============ -->
+    <div id="login-screen" class="screen active">
+        <div class="login-backdrop"></div>
+        <div class="login-card glass">
+            <div class="login-logo" style="text-align: center; width: 100%;">
+                <img src="logo_sk.png" alt="SkyKnight Network"
+                    style="width: 100%; max-width: 300px; height: auto; margin-bottom: 10px;">
+            </div>
+            <p class="login-sub">SKYKNIGHT NETWORK • PREMIUM CONSOLE</p>
+            <div class="form-field">
+                <label>Пароль доступа</label>
+                <input type="password" id="password" placeholder="••••••••••••">
+            </div>
+            <button id="login-btn" class="btn-primary">ВОЙТИ</button>
+            <p id="auth-error" class="error-msg hidden">Неверный пароль</p>
+        </div>
+    </div>
+
+    <!-- ============ DASHBOARD SCREEN ============ -->
+    <div id="dashboard-screen" class="screen">
+
+        <!-- SIDEBAR -->
+        <aside class="sidebar">
+            <div class="brand" style="display: flex; justify-content: center; padding: 20px 0; width: 100%;">
+                <img src="logo_sk.png" alt="SK"
+                    style="width: 100%; max-width: 220px; height: auto; object-fit: contain;">
+            </div>
+
+            <nav class="nav">
+                <a class="nav-item active" data-tab="clients" href="#">
+                    <span class="nav-icon">◈</span> Клиенты
+                </a>
+                <a class="nav-item" data-tab="analytics" href="#">
+                    <span class="nav-icon">◉</span> Аналитика
+                </a>
+                <a class="nav-item" data-tab="settings" href="#">
+                    <span class="nav-icon">◫</span> Настройки
+                </a>
+            </nav>
+
+            <div class="sidebar-footer">
+                <div class="server-badge">
+                    <span class="pulse-dot"></span>
+                    <span class="mono">95.85.116.86</span>
+                </div>
+                <button id="logout-btn" class="btn-outline-sm">Выйти</button>
+            </div>
+        </aside>
+
+        <!-- MAIN CONTENT -->
+        <main class="main">
+
+            <!-- ---- TAB: CLIENTS ---- -->
+            <div id="tab-clients" class="tab active">
+                <div class="page-header">
+                    <div>
+                        <h1>Клиенты</h1>
+                        <p class="subtitle" id="clients-subtitle">Загрузка...</p>
+                    </div>
+                    <button id="add-client-btn" class="btn-primary">+ Новый клиент</button>
+                </div>
+                <div id="clients-grid" class="clients-grid">
+                    <div class="skeleton-card"></div>
+                    <div class="skeleton-card"></div>
+                    <div class="skeleton-card"></div>
+                </div>
+            </div>
+
+            <!-- ---- TAB: ANALYTICS ---- -->
+            <div id="tab-analytics" class="tab">
+                <div class="page-header">
+                    <div>
+                        <h1>Аналитика трафика</h1>
+                        <p class="subtitle">Детальный мониторинг по клиентам и периодам</p>
+                    </div>
+                    <div class="period-switcher">
+                        <button class="period-btn active" data-period="hour">Час</button>
+                        <button class="period-btn" data-period="day">День</button>
+                        <button class="period-btn" data-period="week">Неделя</button>
+                        <button class="period-btn" data-period="month">Месяц</button>
+                    </div>
+                </div>
+                <div class="analytics-body">
+                    <div class="glass-card analytics-summary">
+                        <h3>Суммарный трафик</h3>
+                        <div class="summary-stats">
+                            <div class="summary-item">
+                                <div class="summary-label">↓ Получено</div>
+                                <div class="summary-value" id="total-rx">—</div>
+                            </div>
+                            <div class="summary-item">
+                                <div class="summary-label">↑ Отправлено</div>
+                                <div class="summary-value" id="total-tx">—</div>
+                            </div>
+                            <div class="summary-item">
+                                <div class="summary-label">Активных клиентов</div>
+                                <div class="summary-value" id="active-count">—</div>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="glass-card chart-card">
+                        <h3>Трафик по времени</h3>
+                        <div id="traffic-chart"></div>
+                    </div>
+                    <div class="glass-card chart-card">
+                        <h3>Топ клиентов по трафику</h3>
+                        <div id="clients-chart"></div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- ---- TAB: SETTINGS ---- -->
+            <div id="tab-settings" class="tab">
+                <div class="page-header">
+                    <div>
+                        <h1>Настройки</h1>
+                        <p class="subtitle">Параметры сервера</p>
+                    </div>
+                </div>
+                <div class="settings-grid">
+                    <div class="glass-card">
+                        <h3>🛡️ Параметры обфускации AmneziaWG</h3>
+                        <table class="param-table">
+                            <tr>
+                                <td>Jc</td>
+                                <td class="mono">6</td>
+                            </tr>
+                            <tr>
+                                <td>Jmin / Jmax</td>
+                                <td class="mono">50 / 1000</td>
+                            </tr>
+                            <tr>
+                                <td>S1 / S2</td>
+                                <td class="mono">116 / 0</td>
+                            </tr>
+                            <tr>
+                                <td>H1</td>
+                                <td class="mono">336632809</td>
+                            </tr>
+                            <tr>
+                                <td>H4</td>
+                                <td class="mono">324582203</td>
+                            </tr>
+                            <tr>
+                                <td>I1/I2 преднастройка</td>
+                                <td class="mono accent">Belet.tm</td>
+                            </tr>
+                        </table>
+                    </div>
+                    <div class="glass-card">
+                        <h3>💾 Резервная копия</h3>
+                        <p class="text-muted">Скачайте полную конфигурацию сервера (wg0.json) для восстановления или
+                            переноса.</p>
+                        <a href="/api/wireguard/backup" class="btn-outline-block">Скачать wg0.json</a>
+                    </div>
+                    <div class="glass-card">
+                        <h3>🧹 Очистка данных</h3>
+                        <p class="text-muted">Полный сброс всей накопленной статистики трафика. Это освободит место на
+                            диске.</p>
+                        <button onclick="resetAnalytics()" class="btn-outline-block"
+                            style="color:var(--red); border-color:var(--red-dim)">Сбросить аналитику</button>
+                    </div>
+                </div>
+            </div>
+
+        </main>
+    </div>
+
+    <!-- ============ MODAL: NEW CLIENT ============ -->
+    <div id="modal" class="modal-overlay hidden">
+        <div class="modal-card glass">
+            <div class="modal-header">
+                <h3>Новый клиент</h3>
+                <button id="modal-close" class="modal-close">✕</button>
+            </div>
+            <div class="form-field">
+                <label>Имя клиента</label>
+                <input type="text" id="new-client-name" placeholder="Например: iPhone_16">
+            </div>
+            <div class="modal-actions">
+                <button id="cancel-modal" class="btn-outline-sm">Отмена</button>
+                <button id="confirm-create" class="btn-primary">Создать</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- ============ MODAL: CLIENT DETAIL ============ -->
+    <div id="detail-modal" class="modal-overlay hidden">
+        <div class="modal-card detail-card glass">
+            <div class="modal-header">
+                <h3 id="detail-name">Клиент</h3>
+                <button id="detail-close" class="modal-close">✕</button>
+            </div>
+            <div class="detail-stats">
+                <div class="dstat">
+                    <div class="dstat-label">↓ Получено</div>
+                    <div class="dstat-val" id="detail-rx">—</div>
+                </div>
+                <div class="dstat">
+                    <div class="dstat-label">↑ Отправлено</div>
+                    <div class="dstat-val" id="detail-tx">—</div>
+                </div>
+                <div class="dstat">
+                    <div class="dstat-label">Последний сеанс</div>
+                    <div class="dstat-val" id="detail-hs">—</div>
+                </div>
+                <div class="dstat">
+                    <div class="dstat-label">IP адрес</div>
+                    <div class="dstat-val" id="detail-ip">—</div>
+                </div>
+            </div>
+            <div id="detail-chart"></div>
+            <div class="detail-actions">
+                <button class="btn-outline-sm" id="detail-download">Скачать .conf</button>
+                <button class="btn-outline-sm" id="detail-qr">QR-код</button>
+                <button class="btn-danger-sm" id="detail-delete">Удалить</button>
+            </div>
+        </div>
+    </div>
+    <!-- ============ MODAL: QR CODE ============ -->
+    <div id="qr-modal" class="modal-overlay hidden">
+        <div class="modal-card glass" style="width: 340px; text-align: center;">
+            <div class="modal-header">
+                <h3>QR-код</h3>
+                <button id="qr-close" class="modal-close">✕</button>
+            </div>
+            <div id="qr-container"
+                style="background: white; padding: 1.5rem; border-radius: 12px; margin-top: 0.5rem; display: flex; justify-content: center; align-items: center; min-height: 250px;">
+                <div class="loader"></div>
+            </div>
+        </div>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+
+</html>

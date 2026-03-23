@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html lang="ru">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Amnezia Automator</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+
+<body>
+    <div class="container">
+        <header>
+            <h1>Amnezia WG 1.5</h1>
+            <p>Автоматическая настройка сервера</p>
+        </header>
+
+        <div class="form-group">
+            <div class="input-row">
+                <div class="input-item">
+                    <label>IP Сервера</label>
+                    <input type="text" id="host" value="95.85.116.86">
+                </div>
+                <div class="input-item">
+                    <label>SSH Логин</label>
+                    <input type="text" id="user" value="root">
+                </div>
+            </div>
+
+            <label>SSH Пароль</label>
+            <input type="password" id="password" value="1q2w3e!@571">
+
+            <div class="input-row">
+                <div class="input-item">
+                    <label>Порт WG (UDP)</label>
+                    <input type="number" id="wg_port" value="993">
+                </div>
+                <div class="input-item">
+                    <label>Порт Web UI</label>
+                    <input type="number" id="web_port" value="4455">
+                </div>
+            </div>
+
+            <label>Пароль для Web-панели</label>
+            <input type="text" id="web_pass" value="1q2w3e!@571">
+
+            <label>Токен I1 (Hex)</label>
+            <input type="text" id="i1" value="0xabcd010000010000000000000562656c657402746d0000010001">
+
+            <label>Токен I2 (Hex)</label>
+            <input type="text" id="i2" value="0x1234010000010000000000000573706565640562656c6574026d650000010001">
+        </div>
+
+        <button id="install-btn" onclick="startInstall()">УСТАНОВИТЬ СЕЙЧАС</button>
+
+        <div class="terminal" id="log">
+            <div class="log-line">Система готова...</div>
+        </div>
+    </div>
+
+    <script>
+        function log(msg) {
+            const logDiv = document.getElementById('log');
+            const line = document.createElement('div');
+            line.className = 'log-line';
+            line.textContent = `> ${msg}`;
+            logDiv.appendChild(line);
+            logDiv.scrollTop = logDiv.scrollHeight;
+        }
+
+        async function startInstall() {
+            const btn = document.getElementById('install-btn');
+            btn.disabled = true;
+            btn.textContent = 'УСТАНОВКА...';
+
+            const params = {
+                host: document.getElementById('host').value,
+                user: document.getElementById('user').value,
+                pass: document.getElementById('password').value,
+                wg_port: document.getElementById('wg_port').value,
+                web_port: document.getElementById('web_port').value,
+                web_pass: document.getElementById('web_pass').value,
+                i1: document.getElementById('i1').value,
+                i2: document.getElementById('i2').value
+            };
+
+            await pywebview.api.run_install(params);
+        }
+
+        function setStatus(msg, finished = false) {
+            log(msg);
+            if (finished) {
+                const btn = document.getElementById('install-btn');
+                btn.disabled = false;
+                btn.textContent = 'УСТАНОВИТЬ СЕЙЧАС';
+                alert('Установка завершена успешно!');
+            }
+        }
+    </script>
+</body>
+
+</html>
