@@ -1,5 +1,7 @@
-const API_BASE = '';
-const STATS_API = `${window.location.protocol}//${window.location.hostname}:9191`;
+const HUB_API = `${window.location.protocol}//${window.location.hostname}:9292`;
+let current_node = null;
+let API_BASE = '';
+let STATS_API = '';
 let sessionToken = localStorage.getItem('awg_v3_session');
 let trafficChart, clientsChart;
 
@@ -21,12 +23,54 @@ const authError = document.getElementById('auth-error');
 const clientsGrid = document.getElementById('clients-grid');
 
 // --- Initialization ---
-if (sessionToken) showDashboard();
+if (sessionToken) {
+    showDashboard();
+    loadNodes();
+}
+
+async function loadNodes() {
+    try {
+        const res = await fetch(`${HUB_API}/hub/nodes`);
+        const nodes = await res.json();
+        renderNodesList(nodes);
+        if (nodes.length > 0 && !current_node) {
+            selectNode(nodes[0]);
+        }
+    } catch (e) {
+        console.error("Failed to load nodes", e);
+    }
+}
+
+function renderNodesList(nodes) {
+    const list = document.getElementById('nodes-list');
+    list.innerHTML = '';
+    nodes.forEach(node => {
+        const item = document.createElement('div');
+        item.className = `node-item ${current_node && current_node.name === node.name ? 'active' : ''}`;
+        item.innerHTML = `
+            <span class="node-status-dot"></span>
+            <span class="node-name">${node.name}</span>
+        `;
+        item.onclick = () => selectNode(node);
+        list.appendChild(item);
+    });
+}
+
+function selectNode(node) {
+    current_node = node;
+    API_BASE = `${window.location.protocol}//${node.ip}:4466`; // Assumes default port
+    STATS_API = `${window.location.protocol}//${node.ip}:9191`;
+    
+    // Update UI
+    document.querySelector('.mono').textContent = node.ip;
+    loadNodes(); // Refresh list to update active class
+    loadClients();
+    if (tabs.analytics.classList.contains('active')) loadAnalytics('hour');
+}
 
 function showDashboard() {
     screens.login.classList.remove('active');
     screens.dashboard.classList.add('active');
-    loadClients();
     initCharts();
 }
 
@@ -218,8 +262,11 @@ function initCharts() {
 
 async function loadAnalytics(period) {
     try {
-        const res = await fetch(`${STATS_API}/stats/summary`);
-        const summary = await res.json();
+        const res = await fetch(`${HUB_API}/hub/stats`);
+        const allNodesStats = await res.json();
+        
+        // If we are looking at a specific node, filter data
+        const summary = current_node && allNodesStats[current_node.name] ? allNodesStats[current_node.name].data : {};
 
         let txTotal = 0, rxTotal = 0, active = 0;
         const topClients = [];
