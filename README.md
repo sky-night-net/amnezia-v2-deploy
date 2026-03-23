@@ -61,6 +61,17 @@ python3 amnezia-cli.py
 
 ---
 
+## 📚 Источники и благодарности
+
+Этот проект был собран и доработан на базе следующих открытых решений:
+
+*   **[Amnezia Project](https://amnezia.org)** — Разработка и поддержка протокола AmneziaWG.
+*   **[amnezia-wg-easy](https://github.com/w0rng/amnezia-wg-easy)** (by w0rng) — Docker-образ, используемый в качестве ядра сервера.
+*   **[WireGuard Easy](https://github.com/wg-easy/wg-easy)** — Основа для оригинального веб-интерфейса.
+*   **SkyKnight Network** — Дизайн Premium Dashboard (Glassmorphism), разработка Automator App и системы аналитики.
+
+---
+
 <p align="center">
   Сделано с ❤️ для обеспечения максимальной приватности.
 </p>
