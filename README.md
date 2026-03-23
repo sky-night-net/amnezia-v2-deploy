@@ -18,9 +18,17 @@
 
 ---
 
-## ⚡ Установка компонентов
+## ⚡ Быстрая установка (Terminal App)
 
-### 1. Серверная часть (CLI & Dashboard)
+Просто вставьте эту команду в терминал на вашем локальном компьютере:
+```bash
+curl -sL https://raw.githubusercontent.com/sky-night-net/amnezia-v2-deploy/main/install.sh | bash
+```
+
+---
+
+## ⚡ Ручная установка
+Если вы предпочитаете ручной контроль:
 ```bash
 # Клонируйте репозиторий
 git clone https://github.com/sky-night-net/amnezia-v2-deploy.git
@@ -29,7 +37,6 @@ cd amnezia-v2-deploy
 # Запустите мастер настройки
 python3 amnezia-cli.py
 ```
-*Мастер автоматически запросит IP, пароли, настроит Docker, запустит AWG-экземпляр и развернет Premium Dashboard.*
 
 ### 2. macOS Automator App
 Если вы используете macOS, воспользуйтесь готовым приложением:
