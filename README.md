@@ -104,7 +104,7 @@ curl -sL https://raw.githubusercontent.com/sky-night-net/amnezia-v2-deploy/main/
 *   **[Amnezia Project](https://amnezia.org)** — Разработка и поддержка протокола AmneziaWG.
 *   **[amnezia-wg-easy](https://github.com/w0rng/amnezia-wg-easy)** (by w0rng) — Docker-образ, используемый в качестве ядра сервера.
 *   **[WireGuard Easy](https://github.com/wg-easy/wg-easy)** — Основа для оригинального веб-интерфейса.
-*   **SkyKnight Network** — Дизайн Premium Dashboard (Glassmorphism), разработка Automator App и системы аналитики.
+*   **Sky Night Network** — Дизайн Premium Dashboard (Glassmorphism), разработка Automator App и системы аналитики.
 
 ---
 

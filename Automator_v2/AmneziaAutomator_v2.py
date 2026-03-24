@@ -33,7 +33,7 @@ class AmneziaAutomatorV2(cctk.CTk):
         self.sidebar_frame.grid(row=0, column=0, sticky="nsew")
         self.sidebar_frame.grid_rowconfigure(4, weight=1)
 
-        self.logo_label = cctk.CTkLabel(self.sidebar_frame, text="SKYKNIGHT", font=cctk.CTkFont(size=20, weight="bold"), text_color="#E63946")
+        self.logo_label = cctk.CTkLabel(self.sidebar_frame, text="SKY NIGHT", font=cctk.CTkFont(size=20, weight="bold"), text_color="#E63946")
         self.logo_label.grid(row=0, column=0, padx=20, pady=(20, 10))
         
         self.sub_label = cctk.CTkLabel(self.sidebar_frame, text="VPN HUB v2.0", font=cctk.CTkFont(size=10))

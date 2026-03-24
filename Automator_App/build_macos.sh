@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Скрипт сборки SkyKnight Automator для macOS
-echo "[*] Начинаю сборку SkyKnight VPN Automator..."
+echo "[*] Начинаю сборку Sky Night VPN Automator..."
 
 # 1. Создание виртуального окружения
 if [ ! -d "venv_build" ]; then

@@ -2,7 +2,7 @@
 """
 ╔══════════════════════════════════════════════════╗
 ║     AMNEZIA v2 — PREMIUM TERMINAL APP            ║
-║     Powered by SkyKnight Network                 ║
+║     Powered by Sky Night Network                 ║
 ║     github.com/sky-night-net/amnezia-v2-deploy   ║
 ╚══════════════════════════════════════════════════╝
 
@@ -197,7 +197,7 @@ def print_banner():
     print(f"""{MAGENTA}{BOLD}
     ╔══════════════════════════════════════════════════╗
     ║        AMNEZIA v2 — PREMIUM TERMINAL APP         ║
-    ║        Powered by SkyKnight Network              ║
+    ║        Powered by Sky Night Network              ║
     ╚══════════════════════════════════════════════════╝{RESET}
 """)
 

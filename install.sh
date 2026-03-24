@@ -20,7 +20,7 @@ clear
 echo -e "${C}${B}"
 echo "  ╔══════════════════════════════════════════════════╗"
 echo "  ║      AMNEZIA v2 — PREMIUM INSTALLER             ║"
-echo "  ║      Powered by SkyKnight Network               ║"
+echo "  ║      Powered by Sky Night Network               ║"
 echo "  ╚══════════════════════════════════════════════════╝"
 echo -e "${N}"
 

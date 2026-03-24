@@ -1,7 +1,7 @@
 <#
 .SYNOPSIS
 AmneziaWG v2 Premium - Installer / Auto-Updater
-Powered by SkyKnight Network
+Powered by Sky Night Network
 
 .DESCRIPTION
 This script installs the AmneziaWG terminal application on Windows.
@@ -11,7 +11,7 @@ $ErrorActionPreference = "Continue"
 
 Write-Host "==============================================" -ForegroundColor Cyan
 Write-Host "   AMNEZIA v2 — AUTO INSTALLER (Windows)      " -ForegroundColor Cyan
-Write-Host "          Powered by SkyKnight Network          " -ForegroundColor Cyan
+Write-Host "          Powered by Sky Night Network          " -ForegroundColor Cyan
 Write-Host "==============================================" -ForegroundColor Cyan
 Write-Host ""
 

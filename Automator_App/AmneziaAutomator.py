@@ -37,7 +37,7 @@ class AmneziaAutomator:
         except:
             pass
             
-        tk.Label(header, text="SKYKNIGHT VPN", font=("Outfit", 18, "bold"), bg="#0f1218", fg="#e63946").pack()
+        tk.Label(header, text="SKY NIGHT VPN", font=("Outfit", 18, "bold"), bg="#0f1218", fg="#e63946").pack()
         tk.Label(header, text="AUTOMATION ENGINE v2.0", font=("Outfit", 8), bg="#0f1218", fg="#6a7080").pack()
 
         # Canvas for scroll if needed
@@ -190,7 +190,7 @@ class AmneziaAutomator:
             ssh.exec_command("echo 'y' | ufw enable")
 
             self.log("[+] ПРОЦЕСС ЗАВЕРШЕН УСПЕШНО!")
-            messagebox.showinfo("SkyKnight Deployer", f"Сеть успешно развернута!\nПанель: http://{ip}:{web_p}")
+            messagebox.showinfo("Sky Night Deployer", f"Сеть успешно развернута!\nПанель: http://{ip}:{web_p}")
 
         except Exception as e:
             self.log(f"[!] ОШИБКА: {str(e)}")

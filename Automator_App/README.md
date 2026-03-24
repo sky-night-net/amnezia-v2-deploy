@@ -34,4 +34,4 @@
 3. Запустите сборку: `./build_macos.sh`.
 
 ---
-*Developed by SkyKnight Network*
+*Developed by Sky Night Network*
