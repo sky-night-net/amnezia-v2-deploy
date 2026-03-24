@@ -45,20 +45,25 @@ if ($LASTEXITCODE -ne 0 -or [string]$pyVer -match "was not found" -or [string]::
 
 Write-Host "[✓] $pyVer" -ForegroundColor Green
 
-$InstallDir = "$env:USERPROFILE\.amnezia-v2"
+# Use Join-Path and safe environment variables
+$HomeDir = if ($env:USERPROFILE) { $env:USERPROFILE } else { $env:HOME }
+if (-not $HomeDir) { $HomeDir = "." } # Last resort
+
+$InstallDir = Join-Path $HomeDir ".amnezia-v2"
 $ZipUrl = "https://github.com/sky-night-net/amnezia-v2-deploy/archive/refs/heads/main.zip"
 
 Write-Host "`n[2/3] Fetching AmneziaWG CLI (Native ZIP Method)..." -ForegroundColor Cyan
 
-$TempZip = "$env:TEMP\amnezia-v2-main.zip"
-$ExtractDir = "$env:TEMP\amnezia-v2-extract"
+$TempDir = if ($env:TEMP) { $env:TEMP } else { [System.IO.Path]::GetTempPath() }
+$TempZip = Join-Path $TempDir "amnezia-v2-main.zip"
+$ExtractDir = Join-Path $TempDir "amnezia-v2-extract"
 
 # Ensure directory
 if (-not (Test-Path $InstallDir)) {
     New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
     Write-Host "      Created directory $InstallDir..."
 } else {
-    Write-Host "      Already installed. Pulling latest files..." -ForegroundColor Yellow
+    Write-Host "      Directory already exists: $InstallDir" -ForegroundColor Yellow
 }
 
 try {
@@ -94,18 +99,27 @@ try {
     Write-Host "[!] Could not install optional modules, they may be present already." -ForegroundColor Yellow
 }
 
-# Create a local .bat script for easy access
-$BatPath = "$InstallDir\amneziav2.bat"
-$BatContent = "@echo off`r`ncd /d `"$InstallDir`"`r`n$pythonCmd amnezia-cli.py %*"
-Set-Content -Path $BatPath -Value $BatContent
+# Create a local launcher script
+if ($IsWindows -or $env:OS -match "Windows_NT") {
+    $BatPath = Join-Path $InstallDir "amneziav2.bat"
+    $BatContent = "@echo off`r`ncd /d `"$InstallDir`"`r`n$pythonCmd amnezia-cli.py %*"
+    Set-Content -Path $BatPath -Value $BatContent
+    Write-Host "  1) & `"$BatPath`"" -ForegroundColor Cyan
+} else {
+    $ShPath = Join-Path $InstallDir "run.sh"
+    $ShContent = "#!/bin/bash`ncd `"$InstallDir`"`nexec $pythonCmd amnezia-cli.py `"`$@`""
+    Set-Content -Path $ShPath -Value $ShContent
+    if (Get-Command "chmod" -ErrorAction SilentlyContinue) { chmod +x $ShPath }
+    Write-Host "  1) bash `"$ShPath`"" -ForegroundColor Cyan
+}
 
 Write-Host "==============================================" -ForegroundColor Green
 Write-Host " ✅ INSTALLATION COMPLETE!" -ForegroundColor Green
 Write-Host "==============================================" -ForegroundColor Green
 Write-Host ""
-Write-Host "To run the application again in the future, just type one of these:" -ForegroundColor Gray
-Write-Host "  1) & `"$BatPath`"" -ForegroundColor Cyan
-Write-Host "  2) cd $InstallDir ; python amnezia-cli.py" -ForegroundColor Cyan
+Write-Host "To run the application again in the future, just type:" -ForegroundColor Gray
+# (Written above via conditional logic)
+Write-Host "  2) cd `"$InstallDir`" ; $pythonCmd amnezia-cli.py" -ForegroundColor Cyan
 Write-Host ""
 
 # ─── Launch ───────────────────────────────────────────────────────────────────────

@@ -13,9 +13,20 @@ One-command installer:
 import sys
 import os
 import importlib
+import subprocess
+import time
+import json
 
 if os.name == 'nt':
     os.system('color')
+
+# Optional/External dependencies
+try:
+    import bcrypt
+    import paramiko
+    import requests as req
+except ImportError:
+    pass
 
 # ─── Version ────────────────────────────────────────────────────────────────
 APP_DIR      = os.path.dirname(os.path.abspath(__file__))
@@ -223,7 +234,8 @@ def get_input(prompt, default="", required=False):
         except EOFError:
             # Reached when stdin is piped — reconnect to terminal
             try:
-                sys.stdin = open("/dev/tty")
+                tty_path = "CON" if os.name == "nt" else "/dev/tty"
+                sys.stdin = open(tty_path)
                 val = input(full_prompt).strip()
             except Exception:
                 return default
@@ -281,7 +293,7 @@ def generate_hash(password: str) -> str:
 class AmneziaDeployer:
     def __init__(self, ip: str, password: str,
                  ext_ip: str = "", web_port: str = "",
-                 vpn_port: str = "", stealth: dict = None):
+                 vpn_port: str = "", stealth: dict | None = None):
         import paramiko
         self.ip       = ip
         self.password = password
@@ -501,6 +513,8 @@ class AmneziaDeployer:
 
         idx_str = get_input(L["client_choice"], "1")
         try:
+            if not idx_str:
+                raise ValueError
             idx    = int(idx_str) - 1
             target = clients[idx]
         except (ValueError, IndexError):
@@ -627,7 +641,7 @@ def do_update():
         
     step(L["upd_avail"].format(remote_ver, local_ver))
     ans = get_input(L["upd_ask"], "n")
-    if ans.lower() not in ("y", "yes", "да", "д"):
+    if ans and ans.lower() not in ("y", "yes", "да", "д"):
         return
         
     step(L["upd_doing"])
@@ -730,8 +744,15 @@ def run_cli():
 
         # ── All other actions require SSH ────────────────────────────────
         print(f"\n  {BOLD}{L['params_title']}{RESET}\n")
-        server_ip = get_input(L["ip_prompt"], required=True)
-        server_pw = get_input(L["pass_prompt"], required=True)
+        
+        # Репозиторий последнего IP/пароля для удобства
+        if 'last_ip' not in locals(): last_ip = ""
+        if 'last_pw' not in locals(): last_pw = ""
+
+        server_ip = get_input(L["ip_prompt"], last_ip, required=not bool(last_ip))
+        server_pw = get_input(L["pass_prompt"], last_pw, required=not bool(last_pw))
+        
+        last_ip, last_pw = server_ip, server_pw
 
         if choice in ("1",):
             # Deploy needs more params
@@ -744,8 +765,11 @@ def run_cli():
             deployer = AmneziaDeployer(server_ip, server_pw, ext_ip, web_port, vpn_port)
             if deployer.connect():
                 deployer.cleanup()
+                snmp_val = False
+                if snmp_ans:
+                    snmp_val = (snmp_ans.lower() == "y")
                 deployer.deploy(
-                    snmp_enabled=(snmp_ans.lower() == "y"),
+                    snmp_enabled=snmp_val,
                     hub_ip=hub_ip
                 )
         else:
@@ -762,7 +786,7 @@ def run_cli():
                 deployer.get_configs()
             elif choice == "6":
                 confirm = get_input("Are you sure? (yes/no)", "no")
-                if confirm.lower() in ("yes", "да"):
+                if confirm.lower() in ("y", "yes", "д", "да"):
                     deployer.cleanup()
 
         input(f"\n  {DIM}Press Enter to continue...{RESET}")
