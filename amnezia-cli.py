@@ -1,58 +1,42 @@
-#!/usr/bin/env python3
 import sys
 import os
 import subprocess
 import argparse
 import time
 
-# --- Dependency Checker ---
-def install_dependencies():
-    try:
-        import paramiko
-        import bcrypt
-    except ImportError:
-        print("[!] Missing dependencies. Installing 'paramiko' and 'bcrypt'...")
-        subprocess.check_call([sys.executable, "-m", "pip", "install", "paramiko", "bcrypt"])
-        print("[+] Dependencies installed successfully. Please restart the script.\n")
-        # sys.exit(0) # Instead of exit, we can try to re-import
-        # Refetching modules
-        import importlib
-        importlib.invalidate_caches()
-        global paramiko, bcrypt
-        import paramiko
-        import bcrypt
-
-# Ensure dependencies are available before running the rest
-# Note: For simplicity in a single-file script, we'll try to import them inside functions
-# but it's better to ensure they exist.
-
-# --- App Logic ---
-IMAGE = "ghcr.io/w0rng/amnezia-wg-easy"
-DEFAULT_VPN_PORT = "993"
-DEFAULT_WEB_PORT = "4466"
-LOCAL_WEB_IP = "127.0.0.1"  # Replace with your VPN server local IP
-
-DEFAULT_STEALTH = {
-    "JC": "10", "JMIN": "100", "JMAX": "1000",
-    "S1": "15", "S2": "100",
-    "H1": "1234567891", "H2": "1234567892", "H3": "1234567893", "H4": "1234567894"
-}
+# --- Цвета для "Премиального" терминала ---
+BLUE = "\033[94m"
+GREEN = "\033[92m"
+YELLOW = "\033[93m"
+RED = "\033[91m"
+CYAN = "\033[96m"
+BOLD = "\033[1m"
+RESET = "\033[0m"
 
 def get_input(prompt, default=""):
+    # Форматируем промпт красиво
+    formatted_prompt = f"{BOLD}{CYAN}➤ {prompt}{RESET} {YELLOW}[{default}]{RESET}: "
     try:
-        res = input(f"{prompt} [{default}]: ").strip()
+        res = input(formatted_prompt).strip()
     except EOFError:
-        # If stdin is lost (e.g. piped from curl to bash), reconnect to TTY
+        # Если ввод перехвачен (curl | bash), тихо переключаемся на TTY
         try:
             sys.stdin = open('/dev/tty')
-            res = input(f"{prompt} [{default}]: ").strip()
+            # Не печатаем промпт второй раз, так как он уже виден в консоли
+            res = input().strip()
         except:
             return default
     return res if res else default
 
+def print_step(text):
+    print(f"{GREEN}{BOLD}[*]{RESET} {text}")
+
+def print_error(text):
+    print(f"{RED}{BOLD}[!]{RESET} {RED}ОШИБКА: {text}{RESET}")
+
 def generate_hash(password):
     import bcrypt
-    print("[*] Generating secure password hash...")
+    print_step("Генерация защищенного хэша пароля...")
     salt = bcrypt.gensalt()
     return bcrypt.hashpw(password.encode(), salt).decode()
 
@@ -138,11 +122,12 @@ class AmneziaDeployer:
         return True
 
 def print_banner():
-    print("""
-    █▀▀█ █▀▄▀█ █▀▀▄ █▀▀ ▀▀█ ░▀░ █▀▀█ 　 █▀▀ █   █ 
-    █▄▄█ █ ▀ █ █  █ █▀▀   █  ▀█ █▄▄█ 　 █   █   █ 
-    ▀  ▀ ▀   ▀ ▀  ▀ ▀▀▀  ▀▀▀ ▀▀ ▀  ▀ 　 ▀▀▀ ▀▀▀ ▀▀
-    """)
+    os.system('clear' if os.name == 'posix' else 'cls')
+    print(f"""{RED}{BOLD}
+    ╔══════════════════════════════════════════════════╗
+    ║        AMNEZIA v2 — PREMIUM TERMINAL APP         ║
+    ║        Powered by SkyKnight Network              ║
+    ╚══════════════════════════════════════════════════╝{RESET}""")
 
 def run_cli():
     print_banner()
@@ -159,12 +144,19 @@ def run_cli():
 
     # If no flags provided, enter interactive wizard
     if not (args.auto or args.cleanup):
-        print("Welcome to Amnezia VPN Deployer Wizard.")
-        choice = get_input("Choose action: (1) Deploy (2) Cleanup (3) Exit", "1")
-        if choice == "3": return
+        print(f"\n{BOLD}ВЫБЕРИТЕ ДЕЙСТВИЕ:{RESET}")
+        print(f"  {GREEN}1.{RESET} Развернуть новый узел (Deploy)")
+        print(f"  {YELLOW}2.{RESET} Очистить сервер (Cleanup)")
+        print(f"  {RED}3.{RESET} Выход (Exit)")
         
-        ip = get_input("Server IP")
-        password = get_input("Root Password")
+        choice = get_input("Введите номер действия", "1")
+        if choice == "3": 
+            print(f"\n{GREEN}До встречи!{RESET}")
+            return
+        
+        print(f"\n{BOLD}--- ПАРАМЕТРЫ СЕРВЕРА ---{RESET}")
+        ip = get_input("IP адрес сервера")
+        password = get_input("Пароль SSH (root)")
         
         if choice == "2":
             deployer = AmneziaDeployer(ip, password, "", "", "", {})
@@ -172,10 +164,11 @@ def run_cli():
                 deployer.cleanup()
             return
         
-        ext_ip = get_input("Public External IP")
-        web_port = get_input("Web UI Port", DEFAULT_WEB_PORT)
-        vpn_port = get_input("VPN Port (UDP)", DEFAULT_VPN_PORT)
+        ext_ip = get_input("Публичный (внешний) IP", ip)
+        web_port = get_input("Порт панели управления", DEFAULT_WEB_PORT)
+        vpn_port = get_input("Порт для VPN (UDP)", DEFAULT_VPN_PORT)
         
+        print(f"\n{YELLOW}[*] Начинаю процесс для {ip}...{RESET}")
         deployer = AmneziaDeployer(ip, password, ext_ip, web_port, vpn_port, DEFAULT_STEALTH)
         if deployer.connect():
             deployer.cleanup()
