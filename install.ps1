@@ -45,44 +45,42 @@ if ($LASTEXITCODE -ne 0 -or [string]$pyVer -match "was not found" -or [string]::
 
 Write-Host "[✓] $pyVer" -ForegroundColor Green
 
-# Check Git
-if (-not (Get-Command "git" -ErrorAction SilentlyContinue)) {
-    Write-Host "`n[!] Git is not installed." -ForegroundColor Yellow
-    $ans = Read-Host "Do you want to automatically install Git now via winget? (Y/n)"
-    if ($ans -match "^[Nn]") {
-        Write-Host "[✗] Git is required. Aborting." -ForegroundColor Red
-        Read-Host "Press Enter to close this window..."
-        return
-    }
-    Write-Host "`nInstalling Git via winget..." -ForegroundColor Cyan
-    & winget install Git.Git --accept-package-agreements --accept-source-agreements --silent
-    Write-Host "[✓] Git installed." -ForegroundColor Green
-    
-    # Refresh PATH locally
-    $env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path","User")
-}
-Write-Host "[✓] Git ready" -ForegroundColor Green
-
-# ─── 2. Fetch/Update Source ───────────────────────────────────────────────────────
 $InstallDir = "$env:USERPROFILE\.amnezia-v2"
-$RepoUrl = "https://github.com/sky-night-net/amnezia-v2-deploy.git"
+$ZipUrl = "https://github.com/sky-night-net/amnezia-v2-deploy/archive/refs/heads/main.zip"
 
-Write-Host "`n[2/3] Installing AmneziaWG CLI..." -ForegroundColor Cyan
+Write-Host "`n[2/3] Fetching AmneziaWG CLI (Native ZIP Method)..." -ForegroundColor Cyan
 
-if (Test-Path "$InstallDir\.git") {
-    Write-Host "      Already installed. Pulling latest updates..." -ForegroundColor Yellow
-    Set-Location $InstallDir
-    & git pull --ff-only --quiet
-    Write-Host "[✓] Updated successfully." -ForegroundColor Green
+$TempZip = "$env:TEMP\amnezia-v2-main.zip"
+$ExtractDir = "$env:TEMP\amnezia-v2-extract"
+
+# Ensure directory
+if (-not (Test-Path $InstallDir)) {
+    New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
+    Write-Host "      Created directory $InstallDir..."
 } else {
-    Write-Host "      Cloning repository to $InstallDir..."
-    & git clone --depth=1 --quiet $RepoUrl $InstallDir
-    if ($LASTEXITCODE -ne 0) {
-        Write-Host "[✗] Failed to clone the repository. Check your internet connection." -ForegroundColor Red
-        Read-Host "Press Enter to close this window..."
-        return
-    }
-    Write-Host "[✓] Installed successfully." -ForegroundColor Green
+    Write-Host "      Already installed. Pulling latest files..." -ForegroundColor Yellow
+}
+
+try {
+    Write-Host "      Downloading repository block directly from GitHub..."
+    Invoke-WebRequest -Uri $ZipUrl -OutFile $TempZip -UseBasicParsing
+    
+    if (Test-Path $ExtractDir) { Remove-Item $ExtractDir -Recurse -Force }
+    Write-Host "      Extracting files (no Git required)..."
+    Expand-Archive -Path $TempZip -DestinationPath $ExtractDir -Force
+    
+    $SourceFolder = Join-Path $ExtractDir "amnezia-v2-deploy-main"
+    Copy-Item -Path "$SourceFolder\*" -Destination $InstallDir -Recurse -Force
+    
+    # Cleanup
+    Remove-Item $TempZip -Force
+    Remove-Item $ExtractDir -Recurse -Force
+    
+    Write-Host "[✓] Files successfully applied." -ForegroundColor Green
+} catch {
+    Write-Host "[✗] Download or extraction failed. Check your internet." -ForegroundColor Red
+    Read-Host "Press Enter to close this window..."
+    return
 }
 
 # ─── 3. Setup Python environment and launcher ─────────────────────────────────────

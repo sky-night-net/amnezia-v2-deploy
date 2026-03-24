@@ -632,14 +632,33 @@ def do_update():
         
     step(L["upd_doing"])
     try:
-        subprocess.check_output(
-            ["git", "pull", "--ff-only", "--quiet"], 
-            stderr=subprocess.STDOUT, 
-            cwd=APP_DIR
-        )
+        if os.path.exists(os.path.join(APP_DIR, ".git")):
+            subprocess.check_output(
+                ["git", "pull", "--ff-only", "--quiet"], 
+                stderr=subprocess.STDOUT, 
+                cwd=APP_DIR
+            )
+        else:
+            # Python Native ZIP fallback for standalone/Windows users without Git
+            import urllib.request
+            import zipfile
+            import io
+            zip_url = "https://github.com/sky-night-net/amnezia-v2-deploy/archive/refs/heads/main.zip"
+            req = urllib.request.Request(zip_url, headers={'User-Agent': 'Mozilla/5.0'})
+            with urllib.request.urlopen(req) as resp:
+                with zipfile.ZipFile(io.BytesIO(resp.read())) as z:
+                    for file_info in z.infolist():
+                        if file_info.is_dir(): continue
+                        parts = file_info.filename.split('/', 1)
+                        if len(parts) > 1 and parts[1]:
+                            target_path = os.path.join(APP_DIR, parts[1])
+                            os.makedirs(os.path.dirname(target_path), exist_ok=True)
+                            with open(target_path, "wb") as f:
+                                f.write(z.read(file_info.filename))
         ok(L["upd_ok"])
         time.sleep(1)
         os.execv(sys.executable, [sys.executable, __file__] + sys.argv[1:])
+        
     except subprocess.CalledProcessError as e:
         out = e.output.decode(errors="replace")
         if "not a git repository" in out.lower():
