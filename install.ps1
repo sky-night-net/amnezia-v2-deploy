@@ -5,11 +5,9 @@ Powered by SkyKnight Network
 
 .DESCRIPTION
 This script installs the AmneziaWG terminal application on Windows.
-It ensures Python and Git are present, clones the repository to ~/.amnezia-v2,
-and sets up a convenient runner shortcut.
 #>
 
-$ErrorActionPreference = "Stop"
+$ErrorActionPreference = "Continue"
 
 Write-Host "==============================================" -ForegroundColor Cyan
 Write-Host "   AMNEZIA v2 — AUTO INSTALLER (Windows)      " -ForegroundColor Cyan
@@ -24,10 +22,14 @@ Write-Host "[1/3] Checking dependencies..." -ForegroundColor Cyan
 $pythonCmd = "python"
 if (-not (Get-Command "python3" -ErrorAction SilentlyContinue)) {
     if (-not (Get-Command "python" -ErrorAction SilentlyContinue)) {
+        Write-Host ""
         Write-Host "[✗] Python is not installed or not in your PATH." -ForegroundColor Red
         Write-Host "Please download Python from https://www.python.org/downloads/" -ForegroundColor Yellow
         Write-Host "CRITICAL: Check the box 'Add Python to PATH' during installation!" -ForegroundColor Yellow
-        exit 1
+        Write-Host "Or install via winget: winget install Python.Python.3.11" -ForegroundColor Gray
+        Write-Host ""
+        Read-Host "Press Enter to close this window..."
+        return
     }
 } else {
     $pythonCmd = "python3"
@@ -38,9 +40,13 @@ Write-Host "[✓] $pyVer" -ForegroundColor Green
 
 # Check Git
 if (-not (Get-Command "git" -ErrorAction SilentlyContinue)) {
-    Write-Host "[✗] Git is not installed or not in your PATH." -ForegroundColor Red
-    Write-Host "Please download Git from https://git-scm.com/download/win" -ForegroundColor Yellow
-    exit 1
+        Write-Host ""
+        Write-Host "[✗] Git is not installed or not in your PATH." -ForegroundColor Red
+        Write-Host "Please download Git from https://git-scm.com/download/win" -ForegroundColor Yellow
+        Write-Host "Or install via winget: winget install Git.Git" -ForegroundColor Gray
+        Write-Host ""
+        Read-Host "Press Enter to close this window..."
+        return
 }
 Write-Host "[✓] Git ready" -ForegroundColor Green
 
@@ -58,6 +64,11 @@ if (Test-Path "$InstallDir\.git") {
 } else {
     Write-Host "      Cloning repository to $InstallDir..."
     & git clone --depth=1 --quiet $RepoUrl $InstallDir
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "[✗] Failed to clone the repository. Check your internet connection." -ForegroundColor Red
+        Read-Host "Press Enter to close this window..."
+        return
+    }
     Write-Host "[✓] Installed successfully." -ForegroundColor Green
 }
 
@@ -90,3 +101,7 @@ Write-Host ""
 Write-Host "Launching AmneziaWG Premium Terminal..." -ForegroundColor Magenta
 Start-Sleep -Seconds 1
 & $pythonCmd amnezia-cli.py
+
+# Added pause so terminal doesn't immediately vanish on first run if something fails in python
+Read-Host "Press Enter to close this window..."
+
