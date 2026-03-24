@@ -12,10 +12,10 @@ One-command installer:
 
 import sys
 import os
-import subprocess
-import json
-import time
 import importlib
+
+if os.name == 'nt':
+    os.system('color')
 
 # ─── Version ────────────────────────────────────────────────────────────────
 APP_DIR      = os.path.dirname(os.path.abspath(__file__))
@@ -639,7 +639,7 @@ def do_update():
         )
         ok(L["upd_ok"])
         time.sleep(1)
-        os.execv(sys.executable, ['python3', __file__] + sys.argv[1:])
+        os.execv(sys.executable, [sys.executable, __file__] + sys.argv[1:])
     except subprocess.CalledProcessError as e:
         out = e.output.decode(errors="replace")
         if "not a git repository" in out.lower():
