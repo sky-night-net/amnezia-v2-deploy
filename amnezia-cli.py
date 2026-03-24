@@ -271,17 +271,32 @@ class AmneziaDeployer:
         hub_path = "stats_hub"
         if not os.path.exists(hub_path): return
         try:
+            # 1. Prepare Dockerfile
             dockerfile = f"FROM {HUB_DOCKER_IMAGE}\nWORKDIR /app\nCOPY . .\nRUN pip install flask flask-cors requests\nCMD [\"python\", \"hub_server.py\"]\n"
             with open(f"{hub_path}/Dockerfile", "w") as f: f.write(dockerfile)
+            
             if not remote:
                 print_step("Building Hub locally...")
                 subprocess.check_call(["docker", "build", "-t", "amnezia-hub", hub_path])
-                subprocess.check_call(["docker", "run", "-d", "--name", "amnezia-hub", "-p", "5000:5000", "amnezia-hub"])
+                subprocess.check_call(["docker", "run", "-d", "--name", "amnezia-hub", "--restart", "always", "-p", "5000:5000", "amnezia-hub"])
             else:
                 self.install_docker_remote()
-                print_step("Deploying Hub on remote host...")
-                # In a real scenario, we'd SFTP the files. For now, we simulate.
-                self.exec("mkdir -p /opt/amnezia-hub")
+                print_step("Uploading Hub to remote server (SFTP)...")
+                sftp = self.ssh.open_sftp()
+                remote_dir = "/opt/amnezia-hub"
+                self.exec(f"mkdir -p {remote_dir}")
+                
+                for f_name in os.listdir(hub_path):
+                    local_f = os.path.join(hub_path, f_name)
+                    if os.path.isfile(local_f):
+                        sftp.put(local_f, f"{remote_dir}/{f_name}")
+                sftp.close()
+                
+                print_step("Building and running Hub in Docker on remote...")
+                self.exec(f"cd {remote_dir} && docker build -t amnezia-hub .")
+                self.exec("docker stop amnezia-hub || true && docker rm amnezia-hub || true")
+                self.exec("docker run -d --name amnezia-hub --restart always -p 5000:5000 amnezia-hub")
+                
             print(f"\n{GREEN}{BOLD}{L['success']}{RESET}\n{L['hub_instructions']}")
         except Exception as e: print_error(L["hub_fail"].format(e))
 
@@ -302,9 +317,9 @@ def run_cli():
     args, _ = parser.parse_known_args()
     if not args.auto:
         print(f"\n{BOLD}{L['menu_title']}{RESET}")
-        opts = [L['opt_deploy'], L['opt_status'], L['opt_logs'], L['opt_configs'], L['opt_hub'], L['opt_cleanup'], L['opt_exit']]
-        for i, opt in enumerate(opts[:-1]): print(f"  {CYAN}{i+1}.{RESET} {opt}")
-        print(f"  {RED}0.{RESET} {opts[-1]}")
+        opts = [L['opt_deploy'], L['opt_status'], L['opt_logs'], L['opt_configs'], L['opt_hub'], L['opt_cleanup']]
+        for i, opt in enumerate(opts): print(f"  {CYAN}{i+1}.{RESET} {opt}")
+        print(f"  {RED}0.{RESET} {L['opt_exit']}")
         choice = get_input(L["enter_choice"], "1")
         if choice == "0": return
         print(f"\n{BOLD}{L['params_title']}{RESET}")
