@@ -26,27 +26,40 @@ if (Get-Command "python3" -ErrorAction SilentlyContinue) {
 
 $pyVer = & $pythonCmd --version 2>&1
 if ($LASTEXITCODE -ne 0 -or [string]$pyVer -match "was not found" -or [string]::IsNullOrWhiteSpace($pyVer)) {
-    Write-Host ""
-    Write-Host "[✗] Python is not installed or not in your PATH." -ForegroundColor Red
-    Write-Host "Please download Python from https://www.python.org/downloads/" -ForegroundColor Yellow
-    Write-Host "CRITICAL: Check the box 'Add Python to PATH' during installation!" -ForegroundColor Yellow
-    Write-Host "Or install via winget: winget install Python.Python.3.11" -ForegroundColor Gray
-    Write-Host ""
-    Read-Host "Press Enter to close this window..."
-    return
+    Write-Host "`n[!] Python is not installed." -ForegroundColor Yellow
+    $ans = Read-Host "Do you want to automatically install Python now via winget? (Y/n)"
+    if ($ans -match "^[Nn]") {
+        Write-Host "[✗] Python is required. Aborting." -ForegroundColor Red
+        Read-Host "Press Enter to close this window..."
+        return
+    }
+    Write-Host "`nInstalling Python 3.11 via winget..." -ForegroundColor Cyan
+    & winget install Python.Python.3.11 --accept-package-agreements --accept-source-agreements --silent
+    Write-Host "[✓] Python installed." -ForegroundColor Green
+    
+    # Refresh PATH locally for current session
+    $env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path","User")
+    $pythonCmd = "python"
+    $pyVer = & $pythonCmd --version 2>&1
 }
 
 Write-Host "[✓] $pyVer" -ForegroundColor Green
 
 # Check Git
 if (-not (Get-Command "git" -ErrorAction SilentlyContinue)) {
-        Write-Host ""
-        Write-Host "[✗] Git is not installed or not in your PATH." -ForegroundColor Red
-        Write-Host "Please download Git from https://git-scm.com/download/win" -ForegroundColor Yellow
-        Write-Host "Or install via winget: winget install Git.Git" -ForegroundColor Gray
-        Write-Host ""
+    Write-Host "`n[!] Git is not installed." -ForegroundColor Yellow
+    $ans = Read-Host "Do you want to automatically install Git now via winget? (Y/n)"
+    if ($ans -match "^[Nn]") {
+        Write-Host "[✗] Git is required. Aborting." -ForegroundColor Red
         Read-Host "Press Enter to close this window..."
         return
+    }
+    Write-Host "`nInstalling Git via winget..." -ForegroundColor Cyan
+    & winget install Git.Git --accept-package-agreements --accept-source-agreements --silent
+    Write-Host "[✓] Git installed." -ForegroundColor Green
+    
+    # Refresh PATH locally
+    $env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path","User")
 }
 Write-Host "[✓] Git ready" -ForegroundColor Green
 

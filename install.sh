@@ -4,7 +4,7 @@
 #  github.com/sky-night-net/amnezia-v2-deploy
 #
 #  First install:  curl -sL https://raw.githubusercontent.com/sky-night-net/amnezia-v2-deploy/main/install.sh | bash
-#  Run later:      amnezia          (or ~/.amnezia-v2/run.sh)
+#  Run later:      amneziav2          (or ~/.amnezia-v2/run.sh)
 # ═══════════════════════════════════════════════════════════════
 set -euo pipefail
 
@@ -14,7 +14,7 @@ C='\033[0;36m'; B='\033[1m'; N='\033[0m'
 
 REPO_URL="https://github.com/sky-night-net/amnezia-v2-deploy.git"
 INSTALL_DIR="$HOME/.amnezia-v2"
-BIN_LINK="/usr/local/bin/amnezia"
+BIN_LINK="/usr/local/bin/amneziav2"
 
 clear
 echo -e "${C}${B}"
@@ -42,21 +42,42 @@ install_pkg() {
   esac
 }
 
-# ─── Step 1: Python3 ──────────────────────────────────────────────────────────
-echo -e "${C}[1/4]${N} Checking Python 3..."
-if ! command -v python3 &>/dev/null; then
-  echo -e "  ${Y}Installing Python 3...${N}"
-  [ "$PKG_MANAGER" = "apt" ] && sudo apt-get update -qq
-  install_pkg python3 python3-pip
-fi
-echo -e "  ${G}✓${N} $(python3 --version)"
+# ─── Step 1 & 2: Check & Install Dependencies ────────────────────────────────
+MISSING=()
+if ! command -v python3 &>/dev/null; then MISSING+=("python3"); fi
+if ! command -v git &>/dev/null;     then MISSING+=("git"); fi
 
-# ─── Step 2: Git ─────────────────────────────────────────────────────────────
-echo -e "${C}[2/4]${N} Checking Git..."
-if ! command -v git &>/dev/null; then
-  echo -e "  ${Y}Installing Git...${N}"
-  install_pkg git
+if [ ${#MISSING[@]} -gt 0 ]; then
+  echo -e "${Y}[1/4] Missing dependencies: ${MISSING[*]}${N}"
+  echo -n "      Do you want to automatically install them? [Y/n] "
+  read -r ans </dev/tty || true
+  if [[ "$ans" =~ ^[Nn] ]]; then
+    echo -e "${R}      Cannot proceed without dependencies. Aborting.${N}"
+    exit 1
+  fi
+  
+  # Auto-install Homebrew on macOS if missing
+  if [[ "$OSTYPE" == "darwin"* ]] && [ "$PKG_MANAGER" = "" ]; then
+    echo -e "      ${C}Installing Homebrew (macOS Package Manager)...${N}"
+    NONINTERACTIVE=0 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)" </dev/tty
+    if [ -f "/opt/homebrew/bin/brew" ]; then eval "$(/opt/homebrew/bin/brew shellenv)"; fi
+    if [ -f "/usr/local/bin/brew" ];     then eval "$(/usr/local/bin/brew shellenv)"; fi
+    PKG_MANAGER="brew"
+  fi
+  
+  [ "$PKG_MANAGER" = "apt" ] && sudo apt-get update -qq
+  for pkg in "${MISSING[@]}"; do
+    echo -e "      ${C}Installing $pkg...${N}"
+    if [ "$pkg" = "python3" ] && [ "$PKG_MANAGER" = "apt" ]; then
+      install_pkg python3 python3-pip
+    else
+      install_pkg "$pkg"
+    fi
+  done
 fi
+
+echo -e "${C}[1-2/4]${N} Dependencies are ready"
+echo -e "  ${G}✓${N} $(python3 --version)"
 echo -e "  ${G}✓${N} Git ready"
 
 # ─── Step 3: Clone or update ──────────────────────────────────────────────────
@@ -77,7 +98,7 @@ else
 fi
 
 # ─── Step 4: Create global launcher ──────────────────────────────────────────
-echo -e "${C}[4/4]${N} Creating launcher command ${B}amnezia${N}..."
+echo -e "${C}[4/4]${N} Creating launcher command ${B}amneziav2${N}..."
 
 # Write run.sh inside install dir
 cat > "$INSTALL_DIR/run.sh" << 'RUNSCRIPT'
@@ -90,9 +111,9 @@ chmod +x "$INSTALL_DIR/run.sh"
 # Create symlink /usr/local/bin/amnezia → run.sh (try with sudo if needed)
 if [ -d "/usr/local/bin" ]; then
   if ln -sf "$INSTALL_DIR/run.sh" "$BIN_LINK" 2>/dev/null; then
-    echo -e "  ${G}✓${N} Command ${B}amnezia${N} is now available globally"
+    echo -e "  ${G}✓${N} Command ${B}amneziav2${N} is now available globally"
   elif sudo ln -sf "$INSTALL_DIR/run.sh" "$BIN_LINK" 2>/dev/null; then
-    echo -e "  ${G}✓${N} Command ${B}amnezia${N} is now available globally (sudo)"
+    echo -e "  ${G}✓${N} Command ${B}amneziav2${N} is now available globally (sudo)"
   else
     echo -e "  ${Y}⚠${N}  Could not create global command. Run manually:"
     echo -e "     bash ${INSTALL_DIR}/run.sh"
@@ -103,8 +124,8 @@ fi
 echo ""
 echo -e "${G}${B}  ✅  Installation complete!${N}"
 echo ""
-echo -e "  ${B}To run AmneziaWG:${N}"
-echo -e "     ${G}amnezia${N}                  (if command is available)"
+echo -e "  ${B}To run AmneziaWG v2:${N}"
+echo -e "     ${G}amneziav2${N}                  (if command is available)"
 echo -e "     ${G}bash ~/.amnezia-v2/run.sh${N} (always works)"
 echo ""
 
