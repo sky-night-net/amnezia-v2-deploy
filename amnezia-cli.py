@@ -35,16 +35,109 @@ def install_dependencies():
         subprocess.check_call([sys.executable, "-m", "pip", "install", "paramiko", "bcrypt"])
         print(f"{GREEN}[+] Библиотеки установлены. Проверка завершена.{RESET}")
 
+# --- Локализация (RU/EN) ---
+LOCALES = {
+    "ru": {
+        "welcome": "Добро пожаловать в Amnezia VPN Deployer!",
+        "select_lang": "Выберите язык / Select Language (1: RU, 2: EN)",
+        "menu_title": "ВЫБЕРИТЕ ДЕЙСТВИЕ:",
+        "opt_deploy": "Развернуть новый узел (Deploy)",
+        "opt_status": "Статус и здоровье узла (Status)",
+        "opt_logs": "Логи контейнера (Logs)",
+        "opt_configs": "Получить конфиги клиентов (Configs)",
+        "opt_hub": "Установить Master Hub & Dashboard",
+        "opt_cleanup": "Очистить сервер (Cleanup)",
+        "opt_exit": "Выход",
+        "enter_choice": "Введите номер действия",
+        "params_title": "--- ПАРАМЕТРЫ СЕРВЕРА ---",
+        "ip_prompt": "IP адрес сервера",
+        "pass_prompt": "Пароль SSH (root)",
+        "extip_prompt": "Публичный (внешний) IP",
+        "webport_prompt": "Порт панели управления",
+        "vpnport_prompt": "Порт для VPN (UDP)",
+        "starting": "Начинаю процесс для {}...",
+        "conn_error": "Ошибка подключения: {}",
+        "success": "УСПЕХ!",
+        "bye": "До встречи!",
+        "missing_deps": "[!] Отсутствуют библиотеки. Установка...",
+        "deps_ok": "[+] Библиотеки установлены.",
+        "gen_hash": "Генерация защищенного хэша пароля...",
+        "ssh_conn": "Подключение к {} как root...",
+        "ssh_ok": "[+] SSH соединение установлено.",
+        "cleanup_msg": "[*] Удаление существующих контейнеров и данных...",
+        "cleanup_ok": "[+] Очистка завершена.",
+        "deploy_start": "[*] Запуск развертывания {}...",
+        "firewall_pass": "[*] Настройка брандмауэра (UFW)...",
+        "client_list": "Список доступных клиентов:",
+        "conf_for": "Конфигурация для {}:",
+        "hub_title": "--- УСТАНОВКА MASTER HUB & DASHBOARD ---",
+        "hub_desc": "Это превратит этот компьютер в центральный пульт управления.",
+        "hub_found": "[+] Компоненты найдены.",
+        "node_name_prompt": "Имя первой ноды (напр. ГЕРМАНИЯ)",
+        "node_ip_prompt": "IP адрес для {}",
+        "hub_instructions": "1. Запустите хаб: python3 stats_hub/hub_server.py\n2. Откройте панель: Amnezia_Premium_Dashboard/frontend/index.html"
+    },
+    "en": {
+        "welcome": "Welcome to Amnezia VPN Deployer!",
+        "select_lang": "Select Language (1: RU, 2: EN)",
+        "menu_title": "SELECT ACTION:",
+        "opt_deploy": "Deploy new node",
+        "opt_status": "Node Health & Status",
+        "opt_logs": "Container Logs",
+        "opt_configs": "Get Client Configs",
+        "opt_hub": "Install Master Hub & Dashboard",
+        "opt_cleanup": "Cleanup Server",
+        "opt_exit": "Exit",
+        "enter_choice": "Enter action number",
+        "params_title": "--- SERVER PARAMETERS ---",
+        "ip_prompt": "Server IP",
+        "pass_prompt": "SSH Password (root)",
+        "extip_prompt": "Public (External) IP",
+        "webport_prompt": "Web UI Port",
+        "vpnport_prompt": "VPN Port (UDP)",
+        "starting": "Starting process for {}...",
+        "conn_error": "Connection error: {}",
+        "success": "SUCCESS!",
+        "bye": "Goodbye!",
+        "missing_deps": "[!] Missing dependencies. Installing...",
+        "deps_ok": "[+] Dependencies installed.",
+        "gen_hash": "Generating secure password hash...",
+        "ssh_conn": "Connecting to {} as root...",
+        "ssh_ok": "[+] SSH Connection established.",
+        "cleanup_msg": "[*] Removing existing containers and data...",
+        "cleanup_ok": "[+] Cleanup complete.",
+        "deploy_start": "[*] Starting deployment of {}...",
+        "firewall_pass": "[*] Hardening firewall (UFW)...",
+        "client_list": "List of available clients:",
+        "conf_for": "Configuration for {}:",
+        "hub_title": "--- MASTER HUB & DASHBOARD SETUP ---",
+        "hub_desc": "This computer will become your central management hub.",
+        "hub_found": "[+] Components found.",
+        "node_name_prompt": "Node name (e.g. GERMANY)",
+        "node_ip_prompt": "IP address for {}",
+        "hub_instructions": "1. Run hub: python3 stats_hub/hub_server.py\n2. Open panel: Amnezia_Premium_Dashboard/frontend/index.html"
+    }
+}
+
+# Текущая локаль (по умолчанию английский до выбора)
+L = LOCALES["en"]
+
+def set_language():
+    global L
+    print(f"\n{BOLD}{CYAN}➤ {LOCALES['en']['select_lang']}{RESET}")
+    choice = input(" [1/2]: ").strip()
+    if choice == "1":
+        L = LOCALES["ru"]
+    else:
+        L = LOCALES["en"]
+
 def get_input(prompt, default=""):
-    # Форматируем промпт красиво
     formatted_prompt = f"{BOLD}{CYAN}➤ {prompt}{RESET} {YELLOW}[{default}]{RESET}: "
     try:
         res = input(formatted_prompt).strip()
     except EOFError:
-        # Если ввод перехвачен (curl | bash), тихо переключаемся на TTY
         try:
             sys.stdin = open('/dev/tty')
-            # Не печатаем промпт второй раз, так как он уже виден в консоли
             res = input().strip()
         except:
             return default
@@ -54,11 +147,11 @@ def print_step(text):
     print(f"{GREEN}{BOLD}[*]{RESET} {text}")
 
 def print_error(text):
-    print(f"{RED}{BOLD}[!]{RESET} {RED}ОШИБКА: {text}{RESET}")
+    print(f"{RED}{BOLD}[!]{RESET} {RED}{text}{RESET}")
 
 def generate_hash(password):
     import bcrypt
-    print_step("Генерация защищенного хэша пароля...")
+    print_step(L["gen_hash"])
     salt = bcrypt.gensalt()
     return bcrypt.hashpw(password.encode(), salt).decode()
 
