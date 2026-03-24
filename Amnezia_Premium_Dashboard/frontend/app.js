@@ -56,22 +56,37 @@ function renderNodesList(nodes) {
     });
 }
 
-function selectNode(node) {
-    current_node = node;
-    API_BASE = `${window.location.protocol}//${node.ip}:4466`; // Assumes default port
-    STATS_API = `${window.location.protocol}//${node.ip}:9191`;
-    
-    // Update UI
-    document.querySelector('.mono').textContent = node.ip;
-    loadNodes(); // Refresh list to update active class
-    loadClients();
-    if (tabs.analytics.classList.contains('active')) loadAnalytics('hour');
+let hub_stats_cache = {};
+
+async function pollHubStats() {
+    try {
+        const res = await fetch(`${HUB_API}/hub/stats`);
+        hub_stats_cache = await res.json();
+        if (current_node) renderNodeStats(current_node.name);
+    } catch (e) {
+        console.error("Hub polling error", e);
+    }
 }
 
-function showDashboard() {
-    screens.login.classList.remove('active');
-    screens.dashboard.classList.add('active');
-    initCharts();
+// Start polling
+setInterval(pollHubStats, 5000);
+
+function selectNode(node) {
+    current_node = node;
+    API_BASE = `${window.location.protocol}//${node.ip}:4466`;
+    
+    document.querySelector('.mono').textContent = node.ip;
+    loadClients();
+    renderNodeStats(node.name);
+}
+
+function renderNodeStats(node_name) {
+    const stats = hub_stats_cache[node_name];
+    if (!stats) return;
+    
+    // Logic to update UI with stats.data (which contains the AWG dump)
+    // This will replace the previous direct fetch logic.
+    updateUIWithNodeData(stats.data);
 }
 
 async function handleLogin() {
@@ -149,19 +164,14 @@ let clientsData = [];
 let liveStats = {};
 
 async function loadClients() {
+    if (!current_node) return;
     try {
-        // Fetch clients list from main DB
+        // Fetch clients list from main DB (node management)
         const resClients = await fetch(`${API_BASE}/api/wireguard/client`);
         clientsData = await resClients.json();
 
-        // Try fetching live stats from our custom collector
-        try {
-            const resStats = await fetchWithTimeout(`${STATS_API}/stats/live`);
-            liveStats = await resStats.json();
-        } catch (e) {
-            console.warn('Stats API unreachable, using basic view');
-            liveStats = {};
-        }
+        // Use cached stats from the Hub instead of direct node fetch
+        liveStats = (hub_stats_cache[current_node.name] || {}).data || {};
 
         renderClientsGrid();
     } catch (err) {

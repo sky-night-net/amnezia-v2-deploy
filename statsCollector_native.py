@@ -3,6 +3,7 @@ import subprocess, sqlite3, time, json, threading, os
 from http.server import HTTPServer, BaseHTTPRequestHandler
 
 DB_PATH = '/root/stats.db'
+AUTH_TOKEN = os.getenv("STATS_TOKEN", "default_secret_123")
 
 def init_db():
     conn = sqlite3.connect(DB_PATH)
@@ -51,6 +52,13 @@ class StatsHandler(BaseHTTPRequestHandler):
         self.end_headers()
 
     def do_GET(self):
+        token = self.headers.get('X-Auth-Token')
+        if token != AUTH_TOKEN:
+            self.send_response(401)
+            self.end_headers()
+            self.wfile.write(b'{"error":"Unauthorized"}')
+            return
+
         self.send_response(200)
         self.send_header('Content-Type', 'application/json')
         self.send_header('Access-Control-Allow-Origin', '*')

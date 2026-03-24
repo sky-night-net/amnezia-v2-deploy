@@ -122,7 +122,8 @@ LOCALES = {
         "no_clients": "No clients found.",
         "client_choice": "Enter client number to show config",
         "logs_title": "LOGS ({})",
-        "hub_fail": "Hub setup failed: {}"
+        "hub_fail": "Hub setup failed: {}",
+        "auth_token_msg": "[*] Setting up Secure API Token..."
     }
 }
 
@@ -142,9 +143,10 @@ def install_dependencies():
     try:
         import paramiko
         import bcrypt
+        import requests
     except ImportError:
         print(f"{YELLOW}{L['missing_deps']}{RESET}")
-        subprocess.check_call([sys.executable, "-m", "pip", "install", "--break-system-packages", "paramiko", "bcrypt"])
+        subprocess.check_call([sys.executable, "-m", "pip", "install", "--break-system-packages", "paramiko", "bcrypt", "requests"])
         print(f"{GREEN}{L['deps_ok']}{RESET}")
 
 def get_input(prompt, default=""):
@@ -208,13 +210,20 @@ class AmneziaDeployer:
         print_step(L["docker_install"])
         self.exec("curl -fsSL https://get.docker.com -o get-docker.sh && sh get-docker.sh")
 
-    def deploy(self, snmp_enabled=False):
+    def deploy(self, snmp_enabled=False, hub_ip=None):
+        import secrets
+        auth_token = secrets.token_hex(16)
         pw_hash = generate_hash(self.password)
+        
+        print_step(L["auth_token_msg"])
         print_step(L["deploy_start"].format(IMAGE))
+        
+        # Deploy VPN with Token
         docker_cmd = (
             f"docker run -d --name=amnezia-wg-easy "
             f"-e WG_HOST={self.ext_ip} "
             f"-e PASSWORD_HASH='{pw_hash}' "
+            f"-e STATS_TOKEN='{auth_token}' "
             f"-e PORT={self.web_port} -e WG_PORT={self.vpn_port} "
             f"-e EXPERIMENTAL_AWG=true "
             f"-v ~/.amnezia-wg-easy:/etc/wireguard "
@@ -236,6 +245,20 @@ class AmneziaDeployer:
         if snmp_enabled: self.exec("ufw allow 161/udp")
         self.exec("echo 'y' | ufw enable")
         
+        # Auto-registration with Hub if IP provided
+        if hub_ip:
+            try:
+                print_step(f"Registering node with Hub at {hub_ip}...")
+                import requests
+                reg_data = {
+                    "name": get_input("Node Name for Hub", self.ip),
+                    "ip": self.ip,
+                    "token": auth_token,
+                    "snmp": snmp_enabled
+                }
+                requests.post(f"http://{hub_ip}:5000/hub/register", json=reg_data, timeout=5)
+            except: pass
+
         print(f"\n{GREEN}{BOLD}=== {L['success']} ==={RESET}")
         return True
 
@@ -278,7 +301,7 @@ class AmneziaDeployer:
             if not remote:
                 print_step("Building Hub locally...")
                 subprocess.check_call(["docker", "build", "-t", "amnezia-hub", hub_path])
-                subprocess.check_call(["docker", "run", "-d", "--name", "amnezia-hub", "--restart", "always", "-p", "5000:5000", "amnezia-hub"])
+                subprocess.check_call(["docker", "run", "-d", "--name", "amnezia-hub", "--restart", "always", "-p", "9292:9292", "amnezia-hub"])
             else:
                 self.install_docker_remote()
                 print_step("Uploading Hub to remote server (SFTP)...")
@@ -295,7 +318,7 @@ class AmneziaDeployer:
                 print_step("Building and running Hub in Docker on remote...")
                 self.exec(f"cd {remote_dir} && docker build -t amnezia-hub .")
                 self.exec("docker stop amnezia-hub || true && docker rm amnezia-hub || true")
-                self.exec("docker run -d --name amnezia-hub --restart always -p 5000:5000 amnezia-hub")
+                self.exec("docker run -d --name amnezia-hub --restart always -p 9292:9292 amnezia-hub")
                 
             print(f"\n{GREEN}{BOLD}{L['success']}{RESET}\n{L['hub_instructions']}")
         except Exception as e: print_error(L["hub_fail"].format(e))
@@ -346,10 +369,12 @@ def run_cli():
             web_port = get_input(L["webport_prompt"], DEFAULT_WEB_PORT)
             vpn_port = get_input(L["vpnport_prompt"], DEFAULT_VPN_PORT)
             snmp = get_input(L["snmp_prompt"], "n")
+            hub_reg_ip = get_input("Hub IP for auto-registration (leave empty to skip)", "")
+            
             deployer = AmneziaDeployer(ip, password, ext_ip, web_port, vpn_port, DEFAULT_STEALTH)
             if deployer.connect():
                 deployer.cleanup()
-                deployer.deploy(snmp_enabled=(snmp.lower() == 'y'))
+                deployer.deploy(snmp_enabled=(snmp.lower() == 'y'), hub_ip=hub_reg_ip)
 
 if __name__ == "__main__":
     try: run_cli()
