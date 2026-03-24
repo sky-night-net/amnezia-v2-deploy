@@ -110,16 +110,50 @@ class AmneziaDeployer:
         self.exec("echo 'y' | ufw enable")
         print("[+] Firewall rules applied.")
         
-        print("\n" + "="*40)
-        print("   SUCCESSFULLY DEPLOYED AMNEZIA VPN")
-        print("="*40)
-        print(f"Server IP:  {self.ip}")
-        print(f"External:   {self.ext_ip}")
-        print(f"Web UI:     http://{LOCAL_WEB_IP}:{self.web_port}")
-        print(f"VPN Port:   {self.vpn_port} (UDP)")
-        print(f"Password:   [the one you provided]")
-        print("="*40 + "\n")
-        return True
+    def check_status(self):
+        print_step(f"Проверка состояния контейнера на {self.ip}...")
+        out, _ = self.exec("docker ps --filter name=amnezia-wg-easy --format '{{.Status}} | {{.Image}}'")
+        if out:
+            print(f"{GREEN}{BOLD}[ACTIVE]{RESET} {out}")
+            return True
+        else:
+            print(f"{RED}{BOLD}[NOT FOUND]{RESET} Контейнер не запущен или отсутствует.")
+            return False
+
+    def get_logs(self):
+        print_step("Загрузка логов (сокращенно, последние 20 строк)...")
+        out, _ = self.exec("docker logs --tail 20 amnezia-wg-easy")
+        print("-" * 50)
+        print(out if out else "Логов нет.")
+        print("-" * 50)
+
+    def get_configs(self):
+        print_step("Список доступных клиентов:")
+        # We try to read from the JSON db inside the container
+        out, _ = self.exec("docker exec amnezia-wg-easy cat /etc/wireguard/wg0.json")
+        try:
+            import json
+            data = json.loads(out)
+            clients = data.get("clients", [])
+            if not clients:
+                print("Клиентов не найдено.")
+                return
+            
+            for idx, c in enumerate(clients):
+                print(f"  {CYAN}{idx+1}.{RESET} {c['name']} ({c['address']})")
+            
+            c_idx = get_input("Введите номер клиента для получения конфига", "1")
+            try:
+                target = clients[int(c_idx)-1]
+                print(f"\n{BOLD}Конфигурация для {target['name']}:{RESET}")
+                # For a full terminal "premium" feel, we can't show a real QR image, 
+                # but we can show the text config.
+                conf_out, _ = self.exec(f"docker exec amnezia-wg-easy cat /etc/wireguard/clients/{target['id']}.conf")
+                print(f"{YELLOW}{conf_out}{RESET}")
+            except:
+                print_error("Неверный номер.")
+        except Exception as e:
+            print_error(f"Не удалось получить список: {e}")
 
 def print_banner():
     os.system('clear' if os.name == 'posix' else 'cls')
@@ -146,11 +180,14 @@ def run_cli():
     if not (args.auto or args.cleanup):
         print(f"\n{BOLD}ВЫБЕРИТЕ ДЕЙСТВИЕ:{RESET}")
         print(f"  {GREEN}1.{RESET} Развернуть новый узел (Deploy)")
-        print(f"  {YELLOW}2.{RESET} Очистить сервер (Cleanup)")
-        print(f"  {RED}3.{RESET} Выход (Exit)")
+        print(f"  {CYAN}2.{RESET} Статус и здоровье узла (Status)")
+        print(f"  {YELLOW}3.{RESET} Логи контейнера (Logs)")
+        print(f"  {BOLD}4.{RESET} Получить конфиги клиентов (Configs)")
+        print(f"  {RED}5.{RESET} Очистить сервер (Cleanup)")
+        print(f"  {RED}0.{RESET} Выход (Exit)")
         
         choice = get_input("Введите номер действия", "1")
-        if choice == "3": 
+        if choice == "0": 
             print(f"\n{GREEN}До встречи!{RESET}")
             return
         
@@ -158,21 +195,27 @@ def run_cli():
         ip = get_input("IP адрес сервера")
         password = get_input("Пароль SSH (root)")
         
+        deployer = AmneziaDeployer(ip, password, "", "", "", {})
+        
         if choice == "2":
-            deployer = AmneziaDeployer(ip, password, "", "", "", {})
+            if deployer.connect(): deployer.check_status()
+        elif choice == "3":
+            if deployer.connect(): deployer.get_logs()
+        elif choice == "4":
+            if deployer.connect(): deployer.get_configs()
+        elif choice == "5":
+            if deployer.connect(): deployer.cleanup()
+        elif choice == "1":
+            ext_ip = get_input("Публичный (внешний) IP", ip)
+            web_port = get_input("Порт панели управления", DEFAULT_WEB_PORT)
+            vpn_port = get_input("Порт для VPN (UDP)", DEFAULT_VPN_PORT)
+            
+            print(f"\n{YELLOW}[*] Начинаю процесс для {ip}...{RESET}")
+            # Re-init with full params for deploy
+            deployer = AmneziaDeployer(ip, password, ext_ip, web_port, vpn_port, DEFAULT_STEALTH)
             if deployer.connect():
                 deployer.cleanup()
-            return
-        
-        ext_ip = get_input("Публичный (внешний) IP", ip)
-        web_port = get_input("Порт панели управления", DEFAULT_WEB_PORT)
-        vpn_port = get_input("Порт для VPN (UDP)", DEFAULT_VPN_PORT)
-        
-        print(f"\n{YELLOW}[*] Начинаю процесс для {ip}...{RESET}")
-        deployer = AmneziaDeployer(ip, password, ext_ip, web_port, vpn_port, DEFAULT_STEALTH)
-        if deployer.connect():
-            deployer.cleanup()
-            deployer.deploy()
+                deployer.deploy()
 
     elif args.cleanup:
         if not (args.ip and args.password):
