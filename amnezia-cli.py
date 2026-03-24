@@ -15,6 +15,28 @@ import os
 import subprocess
 import json
 import time
+import importlib
+
+# ─── Version ────────────────────────────────────────────────────────────────
+APP_DIR      = os.path.dirname(os.path.abspath(__file__))
+VERSION_FILE = os.path.join(APP_DIR, "VERSION")
+REMOTE_VER_URL = "https://raw.githubusercontent.com/sky-night-net/amnezia-v2-deploy/main/VERSION"
+
+def get_local_version() -> str:
+    try:
+        with open(VERSION_FILE) as f:
+            return f.read().strip()
+    except Exception:
+        return "unknown"
+
+def get_remote_version() -> str:
+    """Fetch remote VERSION file. Returns empty string on failure."""
+    try:
+        import urllib.request
+        with urllib.request.urlopen(REMOTE_VER_URL, timeout=5) as r:
+            return r.read().decode().strip()
+    except Exception:
+        return ""
 
 # ─── ANSI Colors ────────────────────────────────────────────────────────────
 GREEN   = "\033[92m"
@@ -54,7 +76,17 @@ LOCALES = {
         "opt_hub":       "🖥️   Установить Master Hub",
         "opt_cleanup":   "🗑️   Очистить сервер",
         "opt_exit":      "🚪  Выход",
+        "opt_update":    "🔄  Проверить обновления",
         "enter_choice":  "Введите номер действия",
+        "upd_checking":  "Проверяю наличие обновлений...",
+        "upd_latest":    "У вас уже последняя версия (v{})",
+        "upd_avail":     "Доступна новая версия: v{} (у вас v{})",
+        "upd_ask":       "Обновить? (y/n)",
+        "upd_doing":     "Обновляю...",
+        "upd_ok":        "Обновление установлено! Перезапускаю приложение...",
+        "upd_fail":      "Ошибка обновления: {}",
+        "upd_no_git":    "Git не найден. Скачайте свежую версию вручную.",
+        "upd_offline":   "Нет соединения с интернетом. Работаю в оффлайн-режиме.",
         "params_title":  "─── ПАРАМЕТРЫ СЕРВЕРА ───",
         "ip_prompt":     "IP адрес сервера",
         "pass_prompt":   "Пароль SSH (root)",
@@ -104,7 +136,17 @@ LOCALES = {
         "opt_hub":       "🖥️   Install Master Hub",
         "opt_cleanup":   "🗑️   Cleanup server",
         "opt_exit":      "🚪  Exit",
+        "opt_update":    "🔄  Check for updates",
         "enter_choice":  "Enter action number",
+        "upd_checking":  "Checking for updates...",
+        "upd_latest":    "You are on the latest version (v{})",
+        "upd_avail":     "New version available: v{} (you have v{})",
+        "upd_ask":       "Update now? (y/n)",
+        "upd_doing":     "Updating...",
+        "upd_ok":        "Update installed! Restarting...",
+        "upd_fail":      "Update failed: {}",
+        "upd_no_git":    "Git not found. Download the fresh version manually.",
+        "upd_offline":   "No internet connection. Running in offline mode.",
         "params_title":  "─── SERVER PARAMETERS ───",
         "ip_prompt":     "Server IP address",
         "pass_prompt":   "SSH Password (root)",
@@ -567,6 +609,47 @@ class AmneziaDeployer:
             err(L["hub_fail"].format(str(e)))
 
 
+# ─── Updater ─────────────────────────────────────────────────────────────────
+
+def do_update():
+    separator()
+    step(L["upd_checking"])
+    local_ver = get_local_version()
+    remote_ver = get_remote_version()
+    
+    if not remote_ver:
+        err(L["upd_offline"])
+        return
+        
+    if local_ver == remote_ver:
+        ok(L["upd_latest"].format(local_ver))
+        return
+        
+    step(L["upd_avail"].format(remote_ver, local_ver))
+    ans = get_input(L["upd_ask"], "n")
+    if ans.lower() not in ("y", "yes", "да", "д"):
+        return
+        
+    step(L["upd_doing"])
+    try:
+        subprocess.check_output(
+            ["git", "pull", "--ff-only", "--quiet"], 
+            stderr=subprocess.STDOUT, 
+            cwd=APP_DIR
+        )
+        ok(L["upd_ok"])
+        time.sleep(1)
+        os.execv(sys.executable, ['python3', __file__] + sys.argv[1:])
+    except subprocess.CalledProcessError as e:
+        out = e.output.decode(errors="replace")
+        if "not a git repository" in out.lower():
+            err(L["upd_no_git"])
+        else:
+            err(L["upd_fail"].format(out.strip()[:100]))
+    except Exception as e:
+        err(L["upd_fail"].format(str(e)[:100]))
+
+
 # ─── Menu ────────────────────────────────────────────────────────────────────
 
 def run_cli():
@@ -584,6 +667,7 @@ def run_cli():
             L["opt_configs"], # 4
             L["opt_hub"],     # 5
             L["opt_cleanup"], # 6
+            L["opt_update"],  # 7
         ]
         for i, opt in enumerate(opts, 1):
             print(f"  {CYAN}{i}{RESET}. {opt}")
@@ -596,12 +680,18 @@ def run_cli():
             print(f"\n  {GREEN}{L['bye']}{RESET}\n")
             sys.exit(0)
 
-        if choice not in ("1", "2", "3", "4", "5", "6"):
+        if choice not in ("1", "2", "3", "4", "5", "6", "7"):
             err(L["invalid"])
             time.sleep(1)
             continue
 
-        # ── Hub is local — no SSH needed ─────────────────────────────────
+        # ── Local actions (no SSH needed) ────────────────────────────────
+        
+        if choice == "7":
+            do_update()
+            input(f"\n  {DIM}Press Enter to continue...{RESET}")
+            continue
+
         if choice == "5":
             print(f"\n  {BOLD}{L['params_title']}{RESET}\n")
             loc = get_input(L["hub_loc_prompt"], "1")
