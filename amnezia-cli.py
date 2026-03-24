@@ -421,6 +421,18 @@ class AmneziaDeployer:
             err(f"Docker error: {er[:200]}")
             return False
 
+        # 4. Check if container is actually running
+        time.sleep(2)
+        ps_res, _ = self.run("docker ps --filter name=amnezia-wg-easy --format '{{.Status}}'")
+        if not ps_res:
+            err("Container failed to start. Check logs (option 3).")
+            # Maybe port is already in use?
+            if "Already in use" in out or "already in use" in out or "Already in use" in er or "already in use" in er:
+                 err(f"Port {self.web_port} or {self.vpn_port} is already in use!")
+            return False
+            
+        ok("VPN container is running")
+
         # 4. Optional SNMP agent
         if snmp_enabled:
             step(L["snmp_start"])
@@ -727,6 +739,9 @@ def run_cli():
     print_banner()
     set_language()
     install_dependencies()
+    
+    last_ip = ""
+    last_pw = ""
 
     while True:
         print_banner()
@@ -783,10 +798,6 @@ def run_cli():
         # ── All other actions require SSH ────────────────────────────────
         print(f"\n  {BOLD}{L['params_title']}{RESET}\n")
         
-        # Репозиторий последнего IP/пароля для удобства
-        if 'last_ip' not in locals(): last_ip = ""
-        if 'last_pw' not in locals(): last_pw = ""
-
         server_ip = get_input(L["ip_prompt"], last_ip, required=not bool(last_ip))
         server_pw = get_input(L["pass_prompt"], last_pw, required=not bool(last_pw))
         
