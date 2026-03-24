@@ -38,14 +38,17 @@ DEFAULT_STEALTH = {
     "H1": "1234567891", "H2": "1234567892", "H3": "1234567893", "H4": "1234567894"
 }
 
-def get_input(prompt, default=None):
-    if default:
+def get_input(prompt, default=""):
+    try:
         res = input(f"{prompt} [{default}]: ").strip()
-        return res if res else default
-    val = ""
-    while not val:
-        val = input(f"{prompt}: ").strip()
-    return val
+    except EOFError:
+        # If stdin is lost (e.g. piped from curl to bash), reconnect to TTY
+        try:
+            sys.stdin = open('/dev/tty')
+            res = input(f"{prompt} [{default}]: ").strip()
+        except:
+            return default
+    return res if res else default
 
 def generate_hash(password):
     import bcrypt
