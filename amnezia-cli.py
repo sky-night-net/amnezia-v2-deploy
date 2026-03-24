@@ -169,12 +169,12 @@ class AmneziaDeployer:
 
     def connect(self):
         try:
-            print(f"[*] Connecting to {self.ip} as root...")
+            print(f"[*] {L['ssh_conn'].format(self.ip)}")
             self.ssh.connect(self.ip, username='root', password=self.password, timeout=15)
-            print("[+] SSH Connection established.")
+            print(f"{GREEN}{L['ssh_ok']}{RESET}")
             return True
         except Exception as e:
-            print(f"[-] ERROR: Could not connect to {self.ip}: {e}")
+            print_error(f"{L['conn_error'].format(e)}")
             return False
 
     def exec(self, cmd):
@@ -182,17 +182,16 @@ class AmneziaDeployer:
         return stdout.read().decode().strip(), stderr.read().decode().strip()
 
     def cleanup(self):
-        print("[*] Removing existing Amnezia containers and cleaning data...")
+        print_step(L["cleanup_msg"])
         self.exec("docker stop amnezia-wg-easy amnezia-awg2 || true")
         self.exec("docker rm amnezia-wg-easy amnezia-awg2 || true")
         self.exec("rm -rf ~/.amnezia-wg-easy")
-        print("[+] Cleanup complete.")
+        print(f"{GREEN}{L['cleanup_ok']}{RESET}")
 
     def deploy(self):
         pw_hash = generate_hash(self.password)
         
-        print(f"[*] Starting deployment of {IMAGE}...")
-        # Note: We bind the web port to LOCAL_WEB_IP to restrict access
+        print_step(L["deploy_start"].format(IMAGE))
         docker_cmd = (
             f"docker run -d --name=amnezia-wg-easy "
             f"-e WG_HOST={self.ext_ip} "
@@ -211,43 +210,57 @@ class AmneziaDeployer:
         )
         out, err = self.exec(docker_cmd)
         if err and "is already in use" not in err:
-            print(f"[-] DEPLOYMENT ERROR: {err}")
+            print_error(f"DEPLOY ERROR: {err}")
             return False
         
-        print(f"[+] Container initialized. ID: {out[:12]}")
-            
-        print("[*] Hardening firewall (UFW)...")
-        # Ensure SSH is open
+        print_step(L["firewall_pass"])
         self.exec("ufw allow 22/tcp")
-        # Open VPN port
         self.exec(f"ufw allow {self.vpn_port}/udp")
-        # Enable UFW
         self.exec("echo 'y' | ufw enable")
-        print("[+] Firewall rules applied.")
         
+        print(f"\n{GREEN}{BOLD}=== {L['success']} ==={RESET}")
+        print(f"IP: {self.ip} | Port: {self.vpn_port}\n")
+        return True
+
     def check_status(self):
-        print_step(f"Проверка состояния контейнера на {self.ip}...")
-        out, _ = self.exec("docker ps --filter name=amnezia-wg-easy --format '{{.Status}} | {{.Image}}'")
+        print_step(f"{L['ip_prompt']}: {self.ip}")
+        out, _ = self.exec("docker ps --filter name=amnezia-wg-easy --format '{{.Status}}'")
         if out:
             print(f"{GREEN}{BOLD}[ACTIVE]{RESET} {out}")
-            return True
         else:
-            print(f"{RED}{BOLD}[NOT FOUND]{RESET} Контейнер не запущен или отсутствует.")
-            return False
+            print(f"{RED}{BOLD}[OFFLINE]{RESET}")
 
     def get_logs(self):
-        print_step("Загрузка логов (сокращенно, последние 20 строк)...")
+        print_step(f"LOGS ({self.ip})")
         out, _ = self.exec("docker logs --tail 20 amnezia-wg-easy")
         print("-" * 50)
-        print(out if out else "Логов нет.")
+        print(out if out else "...")
         print("-" * 50)
 
     def get_configs(self):
-        print_step("Список доступных клиентов:")
-        # We try to read from the JSON db inside the container
+        print_step(L["client_list"])
         out, _ = self.exec("docker exec amnezia-wg-easy cat /etc/wireguard/wg0.json")
         try:
             import json
+            data = json.loads(out)
+            clients = data.get("clients", [])
+            if not clients:
+                print(L["no_clients"])
+                return
+            
+            for idx, c in enumerate(clients):
+                print(f"  {CYAN}{idx+1}.{RESET} {c['name']} ({c['address']})")
+            
+            c_idx = get_input(L["client_choice"], "1")
+            try:
+                target = clients[int(c_idx)-1]
+                print(f"\n{BOLD}{L['conf_for'].format(target['name'])}{RESET}")
+                conf_out, _ = self.exec(f"docker exec amnezia-wg-easy cat /etc/wireguard/clients/{target['id']}.conf")
+                print(f"{YELLOW}{conf_out}{RESET}")
+            except:
+                print_error(L["invalid"])
+        except Exception as e:
+            print_error(f"Error: {e}")
             data = json.loads(out)
             clients = data.get("clients", [])
             if not clients:
