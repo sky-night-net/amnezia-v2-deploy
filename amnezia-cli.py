@@ -26,19 +26,10 @@ DEFAULT_STEALTH = {
     "H1": "1234567891", "H2": "1234567892", "H3": "1234567893", "H4": "1234567894"
 }
 
-def install_dependencies():
-    try:
-        import paramiko
-        import bcrypt
-    except ImportError:
-        print(f"{YELLOW}[!] Установка необходимых библиотек (paramiko, bcrypt)...{RESET}")
-        subprocess.check_call([sys.executable, "-m", "pip", "install", "paramiko", "bcrypt"])
-        print(f"{GREEN}[+] Библиотеки установлены. Проверка завершена.{RESET}")
-
 # --- Локализация (RU/EN) ---
 LOCALES = {
     "ru": {
-        "welcome": "Добро пожаловать в Amnezia VPN Deployer!",
+        "welcome": "ДОБРО ПОЖАЛОВАТЬ В AMNEZIA VPN PREMIUM!",
         "select_lang": "Выберите язык / Select Language (1: RU, 2: EN)",
         "menu_title": "ВЫБЕРИТЕ ДЕЙСТВИЕ:",
         "opt_deploy": "Развернуть новый узел (Deploy)",
@@ -59,7 +50,7 @@ LOCALES = {
         "conn_error": "Ошибка подключения: {}",
         "success": "УСПЕХ!",
         "bye": "До встречи!",
-        "missing_deps": "[!] Отсутствуют библиотеки. Установка...",
+        "missing_deps": "[!] Установка необходимых библиотек (paramiko, bcrypt)...",
         "deps_ok": "[+] Библиотеки установлены.",
         "gen_hash": "Генерация защищенного хэша пароля...",
         "ssh_conn": "Подключение к {} как root...",
@@ -71,14 +62,20 @@ LOCALES = {
         "client_list": "Список доступных клиентов:",
         "conf_for": "Конфигурация для {}:",
         "hub_title": "--- УСТАНОВКА MASTER HUB & DASHBOARD ---",
-        "hub_desc": "Это превратит этот компьютер в центральный пульт управления.",
+        "hub_desc": "Этот компьютер станет вашим центральным пультом управления всеми вашими VPN-узлами.",
         "hub_found": "[+] Компоненты найдены.",
         "node_name_prompt": "Имя первой ноды (напр. ГЕРМАНИЯ)",
         "node_ip_prompt": "IP адрес для {}",
-        "hub_instructions": "1. Запустите хаб: python3 stats_hub/hub_server.py\n2. Откройте панель: Amnezia_Premium_Dashboard/frontend/index.html"
+        "hub_instructions": "1. Запустите хаб: python3 stats_hub/hub_server.py\n2. Откройте панель: Amnezia_Premium_Dashboard/frontend/index.html",
+        "invalid": "Неверный выбор.",
+        "no_clients": "Клиентов не найдено.",
+        "client_choice": "Введите номер клиента для получения конфига",
+        "logs_title": "ЛОГИ ({})",
+        "hub_fail": "Ошибка при настройке хаба: {}",
+        "hub_not_found": "Файлы хаба не найдены в репозитории."
     },
     "en": {
-        "welcome": "Welcome to Amnezia VPN Deployer!",
+        "welcome": "WELCOME TO AMNEZIA VPN PREMIUM!",
         "select_lang": "Select Language (1: RU, 2: EN)",
         "menu_title": "SELECT ACTION:",
         "opt_deploy": "Deploy new node",
@@ -99,7 +96,7 @@ LOCALES = {
         "conn_error": "Connection error: {}",
         "success": "SUCCESS!",
         "bye": "Goodbye!",
-        "missing_deps": "[!] Missing dependencies. Installing...",
+        "missing_deps": "[!] Installing dependencies (paramiko, bcrypt)...",
         "deps_ok": "[+] Dependencies installed.",
         "gen_hash": "Generating secure password hash...",
         "ssh_conn": "Connecting to {} as root...",
@@ -111,15 +108,21 @@ LOCALES = {
         "client_list": "List of available clients:",
         "conf_for": "Configuration for {}:",
         "hub_title": "--- MASTER HUB & DASHBOARD SETUP ---",
-        "hub_desc": "This computer will become your central management hub.",
+        "hub_desc": "This computer will become your central management hub for all nodes.",
         "hub_found": "[+] Components found.",
         "node_name_prompt": "Node name (e.g. GERMANY)",
         "node_ip_prompt": "IP address for {}",
-        "hub_instructions": "1. Run hub: python3 stats_hub/hub_server.py\n2. Open panel: Amnezia_Premium_Dashboard/frontend/index.html"
+        "hub_instructions": "1. Run hub: python3 stats_hub/hub_server.py\n2. Open panel: Amnezia_Premium_Dashboard/frontend/index.html",
+        "invalid": "Invalid choice.",
+        "no_clients": "No clients found.",
+        "client_choice": "Enter client number to show config",
+        "logs_title": "LOGS ({})",
+        "hub_fail": "Hub setup failed: {}",
+        "hub_not_found": "Hub files not found in repository."
     }
 }
 
-# Текущая локаль (по умолчанию английский до выбора)
+# --- Глобальные переменные ---
 L = LOCALES["en"]
 
 def set_language():
@@ -130,6 +133,15 @@ def set_language():
         L = LOCALES["ru"]
     else:
         L = LOCALES["en"]
+
+def install_dependencies():
+    try:
+        import paramiko
+        import bcrypt
+    except ImportError:
+        print(f"{YELLOW}{L['missing_deps']}{RESET}")
+        subprocess.check_call([sys.executable, "-m", "pip", "install", "paramiko", "bcrypt"])
+        print(f"{GREEN}{L['deps_ok']}{RESET}")
 
 def get_input(prompt, default=""):
     formatted_prompt = f"{BOLD}{CYAN}➤ {prompt}{RESET} {YELLOW}[{default}]{RESET}: "
@@ -174,7 +186,7 @@ class AmneziaDeployer:
             print(f"{GREEN}{L['ssh_ok']}{RESET}")
             return True
         except Exception as e:
-            print_error(f"{L['conn_error'].format(e)}")
+            print_error(L["conn_error"].format(e))
             return False
 
     def exec(self, cmd):
@@ -190,7 +202,6 @@ class AmneziaDeployer:
 
     def deploy(self):
         pw_hash = generate_hash(self.password)
-        
         print_step(L["deploy_start"].format(IMAGE))
         docker_cmd = (
             f"docker run -d --name=amnezia-wg-easy "
@@ -231,7 +242,7 @@ class AmneziaDeployer:
             print(f"{RED}{BOLD}[OFFLINE]{RESET}")
 
     def get_logs(self):
-        print_step(f"LOGS ({self.ip})")
+        print_step(L["logs_title"].format(self.ip))
         out, _ = self.exec("docker logs --tail 20 amnezia-wg-easy")
         print("-" * 50)
         print(out if out else "...")
@@ -261,40 +272,18 @@ class AmneziaDeployer:
                 print_error(L["invalid"])
         except Exception as e:
             print_error(f"Error: {e}")
-            data = json.loads(out)
-            clients = data.get("clients", [])
-            if not clients:
-                print("Клиентов не найдено.")
-                return
-            
-            for idx, c in enumerate(clients):
-                print(f"  {CYAN}{idx+1}.{RESET} {c['name']} ({c['address']})")
-            
-            c_idx = get_input("Введите номер клиента для получения конфига", "1")
-            try:
-                target = clients[int(c_idx)-1]
-                print(f"\n{BOLD}Конфигурация для {target['name']}:{RESET}")
-                # For a full terminal "premium" feel, we can't show a real QR image, 
-                # but we can show the text config.
-                conf_out, _ = self.exec(f"docker exec amnezia-wg-easy cat /etc/wireguard/clients/{target['id']}.conf")
-                print(f"{YELLOW}{conf_out}{RESET}")
+
     def setup_hub(self):
-        print(f"\n{BOLD}{CYAN}--- УСТАНОВКА MASTER HUB & DASHBOARD ---{RESET}")
-        print("Это превратит этот компьютер в центральный пульт управления всеми вашими VPN-узлами.")
-        
+        print(f"\n{BOLD}{MAGENTA}{L['hub_title']}{RESET}")
+        print(L["hub_desc"])
         try:
-            print_step("Установка зависимостей (Flask, Flask-CORS)...")
             subprocess.check_call([sys.executable, "-m", "pip", "install", "flask", "flask-cors", "requests"])
-            
-            # Создаем начальный конфиг если его нет
             hub_path = "stats_hub/hub_server.py"
             if os.path.exists(hub_path):
-                print(f"{GREEN}[+] Компоненты найдены.{RESET}")
-                node_name = get_input("Имя вашей первой ноды (напр. ГЕРМАНИЯ)", "Германия")
-                node_ip = get_input(f"IP адрес для {node_name}", self.ip)
+                print(L["hub_found"])
+                node_name = get_input(L["node_name_prompt"], "Main")
+                node_ip = get_input(L["node_ip_prompt"].format(node_name), self.ip)
                 
-                print_step(f"Добавление {node_name} в конфиг мониторинга...")
-                # Простейшая замена в файле для демонстрации (лучше через JSON в будущем)
                 with open(hub_path, "r") as f:
                     content = f.read()
                 
@@ -305,13 +294,12 @@ class AmneziaDeployer:
                 with open(hub_path, "w") as f:
                     f.write(content)
                 
-                print(f"\n{GREEN}{BOLD}УСПЕХ!{RESET}")
-                print(f"1. Запустите хаб: {BOLD}python3 {hub_path}{RESET}")
-                print(f"2. Откройте панель: {BOLD}Amnezia_Premium_Dashboard/frontend/index.html{RESET}")
+                print(f"\n{GREEN}{BOLD}{L['success']}{RESET}")
+                print(L["hub_instructions"])
             else:
-                print_error("Файлы хаба не найдены в репозитории.")
+                print_error(L["hub_not_found"])
         except Exception as e:
-            print_error(f"Ошибка при настройке хаба: {e}")
+            print_error(L["hub_fail"].format(e))
 
 def print_banner():
     os.system('clear' if os.name == 'posix' else 'cls')
@@ -323,36 +311,31 @@ def print_banner():
 
 def run_cli():
     print_banner()
+    set_language()
     install_dependencies()
     
-    parser = argparse.ArgumentParser(description="Amnezia VPN Deployment Suite")
-    parser.add_argument("--auto", action="store_true", help="Non-interactive mode")
-    parser.add_argument("--ip", help="Remote Server IP")
-    parser.add_argument("--password", help="Root Password")
-    parser.add_argument("--ext-ip", help="Public IP for clients")
-    parser.add_argument("--cleanup", action="store_true", help="Only cleanup server")
-    
-    args = parser.parse_args()
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--auto", action="store_true")
+    args, unknown = parser.parse_known_args()
 
-    # If no flags provided, enter interactive wizard
-    if not (args.auto or args.cleanup):
-        print(f"\n{BOLD}ВЫБЕРИТЕ ДЕЙСТВИЕ:{RESET}")
-        print(f"  {GREEN}1.{RESET} Развернуть новый узел (Deploy)")
-        print(f"  {CYAN}2.{RESET} Статус и здоровье узла (Status)")
-        print(f"  {YELLOW}3.{RESET} Логи контейнера (Logs)")
-        print(f"  {BOLD}4.{RESET} Получить конфиги клиентов (Configs)")
-        print(f"  {MAGENTA}5.{RESET} Установить Master Hub & Dashboard {BOLD}(NEW){RESET}")
-        print(f"  {RED}6.{RESET} Очистить сервер (Cleanup)")
-        print(f"  {RED}0.{RESET} Выход (Exit)")
+    if not args.auto:
+        print(f"\n{BOLD}{L['menu_title']}{RESET}")
+        print(f"  {GREEN}1.{RESET} {L['opt_deploy']}")
+        print(f"  {CYAN}2.{RESET} {L['opt_status']}")
+        print(f"  {YELLOW}3.{RESET} {L['opt_logs']}")
+        print(f"  {BOLD}4.{RESET} {L['opt_configs']}")
+        print(f"  {MAGENTA}5.{RESET} {L['opt_hub']}")
+        print(f"  {RED}6.{RESET} {L['opt_cleanup']}")
+        print(f"  {RED}0.{RESET} {L['opt_exit']}")
         
-        choice = get_input("Введите номер действия", "1")
+        choice = get_input(L["enter_choice"], "1")
         if choice == "0": 
-            print(f"\n{GREEN}До встречи!{RESET}")
+            print(f"\n{GREEN}{L['bye']}{RESET}")
             return
         
-        print(f"\n{BOLD}--- ПАРАМЕТРЫ СЕРВЕРА ---{RESET}")
-        ip = get_input("IP адрес сервера")
-        password = get_input("Пароль SSH (root)")
+        print(f"\n{BOLD}{L['params_title']}{RESET}")
+        ip = get_input(L["ip_prompt"])
+        password = get_input(L["pass_prompt"])
         
         deployer = AmneziaDeployer(ip, password, "", "", "", {})
         
@@ -367,37 +350,19 @@ def run_cli():
         elif choice == "6":
             if deployer.connect(): deployer.cleanup()
         elif choice == "1":
-            ext_ip = get_input("Публичный (внешний) IP", ip)
-            web_port = get_input("Порт панели управления", DEFAULT_WEB_PORT)
-            vpn_port = get_input("Порт для VPN (UDP)", DEFAULT_VPN_PORT)
+            ext_ip = get_input(L["extip_prompt"], ip)
+            web_port = get_input(L["webport_prompt"], DEFAULT_WEB_PORT)
+            vpn_port = get_input(L["vpnport_prompt"], DEFAULT_VPN_PORT)
             
-            print(f"\n{YELLOW}[*] Начинаю процесс для {ip}...{RESET}")
-            # Re-init with full params for deploy
+            print(f"\n{YELLOW}{L['starting'].format(ip)}{RESET}")
             deployer = AmneziaDeployer(ip, password, ext_ip, web_port, vpn_port, DEFAULT_STEALTH)
             if deployer.connect():
                 deployer.cleanup()
                 deployer.deploy()
 
-    elif args.cleanup:
-        if not (args.ip and args.password):
-            print("Cleanup requires --ip and --password")
-            return
-        deployer = AmneziaDeployer(args.ip, args.password, "", "", "", {})
-        if deployer.connect():
-            deployer.cleanup()
-            
-    elif args.auto:
-        if not (args.ip and args.password and args.ext_ip):
-            print("Auto mode requires --ip, --password, and --ext-ip")
-            return
-        deployer = AmneziaDeployer(args.ip, args.password, args.ext_ip, DEFAULT_WEB_PORT, DEFAULT_VPN_PORT, DEFAULT_STEALTH)
-        if deployer.connect():
-            deployer.cleanup()
-            deployer.deploy()
-
 if __name__ == "__main__":
     try:
         run_cli()
     except KeyboardInterrupt:
-        print("\n[!] Aborted by user.")
+        print("\n[!] Exit.")
         sys.exit(0)
