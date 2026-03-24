@@ -25,7 +25,7 @@ if (Get-Command "python3" -ErrorAction SilentlyContinue) {
 }
 
 $pyVer = & $pythonCmd --version 2>&1
-if ($LASTEXITCODE -ne 0 -or [string]$pyVer -match "was not found") {
+if ($LASTEXITCODE -ne 0 -or [string]$pyVer -match "was not found" -or [string]::IsNullOrWhiteSpace($pyVer)) {
     Write-Host ""
     Write-Host "[✗] Python is not installed or not in your PATH." -ForegroundColor Red
     Write-Host "Please download Python from https://www.python.org/downloads/" -ForegroundColor Yellow
