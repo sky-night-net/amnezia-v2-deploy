@@ -171,10 +171,40 @@ class AmneziaDeployer:
                 # but we can show the text config.
                 conf_out, _ = self.exec(f"docker exec amnezia-wg-easy cat /etc/wireguard/clients/{target['id']}.conf")
                 print(f"{YELLOW}{conf_out}{RESET}")
-            except:
-                print_error("Неверный номер.")
+    def setup_hub(self):
+        print(f"\n{BOLD}{CYAN}--- УСТАНОВКА MASTER HUB & DASHBOARD ---{RESET}")
+        print("Это превратит этот компьютер в центральный пульт управления всеми вашими VPN-узлами.")
+        
+        try:
+            print_step("Установка зависимостей (Flask, Flask-CORS)...")
+            subprocess.check_call([sys.executable, "-m", "pip", "install", "flask", "flask-cors", "requests"])
+            
+            # Создаем начальный конфиг если его нет
+            hub_path = "stats_hub/hub_server.py"
+            if os.path.exists(hub_path):
+                print(f"{GREEN}[+] Компоненты найдены.{RESET}")
+                node_name = get_input("Имя вашей первой ноды (напр. ГЕРМАНИЯ)", "Германия")
+                node_ip = get_input(f"IP адрес для {node_name}", self.ip)
+                
+                print_step(f"Добавление {node_name} в конфиг мониторинга...")
+                # Простейшая замена в файле для демонстрации (лучше через JSON в будущем)
+                with open(hub_path, "r") as f:
+                    content = f.read()
+                
+                new_node = f'{{"name": "{node_name}", "ip": "{node_ip}", "port": 9191}}'
+                if "NODES = [" in content:
+                    content = content.replace("NODES = [", f"NODES = [\n    {new_node},")
+                
+                with open(hub_path, "w") as f:
+                    f.write(content)
+                
+                print(f"\n{GREEN}{BOLD}УСПЕХ!{RESET}")
+                print(f"1. Запустите хаб: {BOLD}python3 {hub_path}{RESET}")
+                print(f"2. Откройте панель: {BOLD}Amnezia_Premium_Dashboard/frontend/index.html{RESET}")
+            else:
+                print_error("Файлы хаба не найдены в репозитории.")
         except Exception as e:
-            print_error(f"Не удалось получить список: {e}")
+            print_error(f"Ошибка при настройке хаба: {e}")
 
 def print_banner():
     os.system('clear' if os.name == 'posix' else 'cls')
@@ -204,7 +234,8 @@ def run_cli():
         print(f"  {CYAN}2.{RESET} Статус и здоровье узла (Status)")
         print(f"  {YELLOW}3.{RESET} Логи контейнера (Logs)")
         print(f"  {BOLD}4.{RESET} Получить конфиги клиентов (Configs)")
-        print(f"  {RED}5.{RESET} Очистить сервер (Cleanup)")
+        print(f"  {MAGENTA}5.{RESET} Установить Master Hub & Dashboard {BOLD}(NEW){RESET}")
+        print(f"  {RED}6.{RESET} Очистить сервер (Cleanup)")
         print(f"  {RED}0.{RESET} Выход (Exit)")
         
         choice = get_input("Введите номер действия", "1")
@@ -225,6 +256,8 @@ def run_cli():
         elif choice == "4":
             if deployer.connect(): deployer.get_configs()
         elif choice == "5":
+            deployer.setup_hub()
+        elif choice == "6":
             if deployer.connect(): deployer.cleanup()
         elif choice == "1":
             ext_ip = get_input("Публичный (внешний) IP", ip)
