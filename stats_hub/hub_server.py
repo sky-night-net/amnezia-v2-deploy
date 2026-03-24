@@ -12,7 +12,7 @@ import time
 import threading
 import logging
 
-from flask import Flask, jsonify, request, Response
+from flask import Flask, jsonify, request, Response, redirect, render_template_string
 from flask_cors import CORS
 
 try:
@@ -127,6 +127,46 @@ def poll_nodes():
         time.sleep(POLL_SEC)
 
 # ─── Routes ──────────────────────────────────────────────────────────────────
+@app.route("/")
+def index():
+    """Redirect to stats or show simple UI."""
+    return render_template_string("""
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <title>Amnezia V2 Master Hub</title>
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <style>
+            body { font-family: -apple-system, sans-serif; background: #1a1b1e; color: #eee; padding: 20px; }
+            .node { background: #25262b; border-radius: 8px; padding: 15px; margin-bottom: 20px; border: 1px solid #373a40; }
+            .online { color: #40c057; } .offline { color: #fa5252; } .snmp { color: #228be6; }
+            .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 20px; }
+            h1 { color: #fff; border-bottom: 1px solid #333; padding-bottom: 10px; }
+            .stat { font-size: 0.9em; margin-top: 5px; color: #a5a5a5; }
+            b { color: #fff; }
+        </style>
+    </head>
+    <body>
+        <h1>🔭 Amnezia V2 Master Hub</h1>
+        <div class="grid">
+        {% for name, node in stats.items() %}
+            <div class="node">
+                <h3>{{ name }} <span class="{{ node.status.lower() }}">●</span></h3>
+                <div class="stat">IP: <b>{{ node.ip }}</b></div>
+                <div class="stat">Status: <b>{{ node.status }}</b> (via {{ node.mode }})</div>
+                {% if node.data %}
+                    <div class="stat">CPU: {{ node.data.cpu or '—' }}% | RAM: {{ node.data.mem or '—' }}%</div>
+                    <div class="stat">Traffic: ↓{{ node.data.net_in or '—' }} | ↑{{ node.data.net_out or '—' }}</div>
+                {% endif %}
+                <div class="stat">Updated: {{ node.last_seen | int }}</div>
+            </div>
+        {% endfor %}
+        </div>
+        <p style="text-align:center; font-size:0.8em; color:#555">Auto-refresh every 15s</p>
+        <script>setTimeout(() => location.reload(), 15000);</script>
+    </body>
+    </html>
+    """, stats=node_stats)
 
 @app.route("/hub/health")
 def health():
