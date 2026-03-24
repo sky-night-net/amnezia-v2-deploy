@@ -11,10 +11,13 @@ import os
 import time
 import threading
 import logging
+import sqlite3
+from datetime import datetime
 
-from flask import Flask, jsonify, request, Response, redirect, render_template, render_template_string
+from flask import Flask, jsonify, request, Response, redirect, render_template, render_template_string, session
 from flask_cors import CORS
 from collections import deque
+import functools
 
 try:
     import requests as req_lib
@@ -36,6 +39,9 @@ CORS(app, resources={r"/*": {"origins": "*"}})
 PORT        = int(os.getenv("HUB_PORT", "9292"))
 CONFIG_FILE = os.getenv("HUB_CONFIG", "hub_config.json")
 POLL_SEC    = int(os.getenv("POLL_INTERVAL", "15"))
+HUB_PASSWORD = os.getenv("HUB_PASSWORD", "admin")
+
+app.secret_key = os.getenv("HUB_SECRET", "super-secret-hub-key")
 
 # In-memory state
 node_stats: dict = {}
@@ -46,40 +52,100 @@ traffic_history = {
 }
 _lock = threading.Lock()
 
-# ─── Config helpers ──────────────────────────────────────────────────────────
+# ─── Database ───────────────────────────────────────────────────────────────
+DB_FILE = os.getenv("HUB_DB", "amnezia_ui.db")
 
-def load_nodes() -> list:
-    if os.path.exists(CONFIG_FILE):
+def get_db():
+    conn = sqlite3.connect(DB_FILE)
+    conn.row_factory = sqlite3.Row
+    return conn
+
+def init_db():
+    """Initialize the database schema."""
+    with get_db() as conn:
+        conn.executescript("""
+            CREATE TABLE IF NOT EXISTS nodes (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT UNIQUE,
+                ip TEXT UNIQUE,
+                port INTEGER,
+                token TEXT,
+                status TEXT DEFAULT 'Offline',
+                mode TEXT DEFAULT 'HTTP',
+                last_seen INTEGER,
+                settings TEXT
+            );
+            CREATE TABLE IF NOT EXISTS inbounds (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                node_id INTEGER,
+                protocol TEXT,
+                port INTEGER,
+                settings TEXT,
+                FOREIGN KEY(node_id) REFERENCES nodes(id) ON DELETE CASCADE
+            );
+            CREATE TABLE IF NOT EXISTS clients (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                inbound_id INTEGER,
+                username TEXT,
+                secret TEXT,
+                traffic_limit INTEGER, -- in bytes
+                traffic_used INTEGER DEFAULT 0,
+                expiry_time INTEGER,
+                is_active INTEGER DEFAULT 1,
+                FOREIGN KEY(inbound_id) REFERENCES inbounds(id) ON DELETE CASCADE
+            );
+            CREATE TABLE IF NOT EXISTS traffic_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                target_type TEXT, -- 'node' or 'client'
+                target_id INTEGER,
+                timestamp INTEGER,
+                down INTEGER, -- in bytes
+                up INTEGER
+            );
+        """)
+    log.info(f"Database initialized: {DB_FILE}")
+
+def migrate_from_json():
+    """Import nodes from hub_config.json if it exists and DB is empty."""
+    if not os.path.exists(CONFIG_FILE):
+        return
+    
+    with get_db() as conn:
+        count = conn.execute("SELECT COUNT(*) FROM nodes").fetchone()[0]
+        if count > 0:
+            return  # Already has data
+        
         try:
             with open(CONFIG_FILE, "r") as f:
-                return json.load(f)
-        except (json.JSONDecodeError, IOError):
-            pass
-    return []
+                nodes = json.load(f)
+                for n in nodes:
+                    conn.execute(
+                        "INSERT OR IGNORE INTO nodes (name, ip, token) VALUES (?, ?, ?)",
+                        (n.get("name"), n.get("ip"), n.get("token"))
+                    )
+            log.info(f"Migrated {len(nodes)} nodes from JSON to SQLite")
+        except Exception as e:
+            log.error(f"Migration failed: {e}")
 
+# ─── Data helpers ─────────────────────────────────────────────────────────────
 
-def save_nodes(nodes: list):
-    try:
-        with open(CONFIG_FILE, "w") as f:
-            json.dump(nodes, f, indent=2)
-    except IOError as e:
-        log.error(f"Cannot save config: {e}")
-
+def load_nodes() -> list:
+    """Load nodes from DB."""
+    with get_db() as conn:
+        rows = conn.execute("SELECT * FROM nodes").fetchall()
+        return [dict(r) for r in rows]
 
 def upsert_node(new_node: dict):
-    """Add or update a node by IP address."""
-    nodes = load_nodes()
-    updated = False
-    result = []
-    for n in nodes:
-        if n.get("ip") == new_node.get("ip"):
-            result.append(new_node)
-            updated = True
-        else:
-            result.append(n)
-    if not updated:
-        result.append(new_node)
-    save_nodes(result)
+    """Add or update a node in DB."""
+    with get_db() as conn:
+        conn.execute("""
+            INSERT INTO nodes (name, ip, token, last_seen) 
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(ip) DO UPDATE SET
+                name = excluded.name,
+                token = excluded.token,
+                last_seen = excluded.last_seen
+        """, (new_node.get("name"), new_node.get("ip"), new_node.get("token"), int(time.time())))
 
 # ─── Polling thread ──────────────────────────────────────────────────────────
 
@@ -91,6 +157,7 @@ def poll_nodes():
             name  = node.get("name", node.get("ip", "unknown"))
             ip    = node.get("ip", "")
             token = node.get("token", "")
+            node_id = node.get("id")
 
             if not ip:
                 continue
@@ -130,216 +197,348 @@ def poll_nodes():
             with _lock:
                 node_stats[name] = result
 
-        # 3. Update aggregate history
-        total_down = 0.0
-        total_up = 0.0
+        # 3. Update aggregate history & DB
+        total_down_val = 0.0
+        total_up_val = 0.0
         with _lock:
             for n in node_stats.values():
                 d = n.get("data", {})
-                # Try to parse strings like "1.2 MB/s" or "400 KB/s"
-                for k, v in [("net_in", "down"), ("net_out", "up")]:
+                for k in ["net_in", "net_out"]:
                     val_str = str(d.get(k, "0"))
                     try:
                         num = float(val_str.split()[0])
                         if "MB" in val_str: num *= 1024
-                        if k == "net_in": total_down += float(num)
-                        else: total_up += float(num)
-                    except (ValueError, IndexError, TypeError): pass
+                        if k == "net_in":
+                            total_down_val = total_down_val + float(num)
+                        else:
+                            total_up_val = total_up_val + float(num)
+                    except (ValueError, IndexError, TypeError):
+                        pass
             
-            traffic_history["down"].append(round(total_down / 1024, 2))
-            traffic_history["up"].append(round(total_up / 1024, 2))
+            traffic_history["down"].append(round(float(total_down_val / 1024), 2))
+            traffic_history["up"].append(round(float(total_up_val / 1024), 2))
+
+        # 4. Save to DB history (every polling cycle for now)
+        try:
+            with get_db() as conn:
+                now_ts = int(time.time())
+                for name, info in node_stats.items():
+                    d = info.get("data", {})
+                    # Find node_id if not present
+                    node_row = conn.execute("SELECT id FROM nodes WHERE ip = ?", (info['ip'],)).fetchone()
+                    if node_row:
+                        node_id = node_row['id']
+                        # Update status
+                        conn.execute("UPDATE nodes SET status=?, mode=?, last_seen=? WHERE id=?", 
+                                   (info['status'], info['mode'], info['last_seen'], node_id))
+                        # Save traffic point (simple diff or direct)
+                        # For now, just save current speed as history point
+                        conn.execute("INSERT INTO traffic_history (target_type, target_id, timestamp, down, up) VALUES (?, ?, ?, ?, ?)",
+                                   ('node', node_id, now_ts, d.get("net_in_bytes", 0), d.get("net_out_bytes", 0)))
+        except Exception as e:
+            log.error(f"DB update failed: {e}")
 
         time.sleep(POLL_SEC)
 
+# ─── Auth Decorator ──────────────────────────────────────────────────────────
+
+def login_required(f):
+    @functools.wraps(f)
+    def decorated_function(*args, **kwargs):
+        if not session.get("logged_in"):
+            if request.path.startswith("/hub/api/"):
+                return jsonify({"status": "error", "message": "Unauthorized"}), 401
+            return redirect("/login")
+        return f(*args, **kwargs)
+    return decorated_function
+
 # ─── Routes ──────────────────────────────────────────────────────────────────
-@app.route("/")
-def index():
-    """Premium Dashboard."""
-    return render_template_string(r"""
+
+@app.route("/login", methods=["GET", "POST"])
+def login():
+    if request.method == "POST":
+        password = request.form.get("password")
+        if password == HUB_PASSWORD:
+            session["logged_in"] = True
+            return redirect("/")
+        return render_template_string("<h2>Invalid Password</h2><a href='/login'>Try again</a>")
+    
+    return render_template_string("""
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+        <title>Login — Amnezia Hub</title>
+        <script src="https://cdn.tailwindcss.com"></script>
+        <style>body { background-color: #0f172a; color: #f8fafc; font-family: sans-serif; }</style>
+    </head>
+    <body class="flex items-center justify-center min-h-screen">
+        <div class="bg-slate-800 p-8 rounded-2xl shadow-2xl w-96 border border-slate-700">
+            <h1 class="text-2xl font-bold mb-6 text-center text-sky-400">Amnezia Hub Login</h1>
+            <form method="POST">
+                <input type="password" name="password" placeholder="Password" required 
+                       class="w-full bg-slate-900 border-none rounded-lg px-4 py-3 mb-4 focus:ring-2 focus:ring-sky-500 outline-none">
+                <button type="submit" class="w-full bg-sky-500 hover:bg-sky-600 py-3 rounded-lg font-bold transition-all">Login</button>
+            </form>
+        </div>
+    </body>
+    </html>
+    """)
+
+@app.route("/logout")
+def logout():
+    session.pop("logged_in", None)
+    return redirect("/login")
+
+def get_base_template(content, active_page='dashboard'):
+    return f"""
 <!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Amnezia V2 Master Hub</title>
+    <title>Amnezia Control Panel</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
     <style>
-        body { font-family: 'Inter', sans-serif; background-color: #0f172a; color: #f8fafc; }
-        .glass { background: rgba(30, 41, 59, 0.7); backdrop-filter: blur(12px); border: 1px solid rgba(255, 255, 255, 0.1); }
-        .neon-border { box-shadow: 0 0 15px rgba(56, 189, 248, 0.1); border: 1px solid rgba(56, 189, 248, 0.2); }
-        .status-online { color: #4ade80; }
-        .status-offline { color: #f87171; }
-        .status-snmp { color: #38bdf8; }
-        ::-webkit-scrollbar { width: 8px; }
-        ::-webkit-scrollbar-track { background: #1e293b; }
-        ::-webkit-scrollbar-thumb { background: #334155; border-radius: 4px; }
+        body {{ font-family: 'Inter', sans-serif; background-color: #0f172a; color: #f8fafc; overflow-x: hidden; }}
+        .glass {{ background: rgba(30, 41, 59, 0.7); backdrop-filter: blur(12px); border: 1px solid rgba(255, 255, 255, 0.1); }}
+        .neon-border {{ box-shadow: 0 0 15px rgba(56, 189, 248, 0.1); border: 1px solid rgba(56, 189, 248, 0.2); }}
+        .sidebar-item {{ transition: all 0.2s; border-radius: 0.75rem; }}
+        .sidebar-item:hover {{ background: rgba(56, 189, 248, 0.1); color: #38bdf8; }}
+        .sidebar-item.active {{ background: #38bdf8; color: white; box-shadow: 0 0 20px rgba(56, 189, 248, 0.3); }}
     </style>
 </head>
-<body class="min-h-screen pb-12">
-    <header class="glass sticky top-0 z-50 px-6 py-4 flex items-center justify-between border-b border-slate-800">
-        <div class="flex items-center space-x-3">
+<body class="flex min-h-screen">
+    <!-- Sidebar -->
+    <aside class="w-64 glass border-r border-slate-800 p-6 flex flex-col fixed h-full">
+        <div class="flex items-center space-x-3 mb-10">
             <div class="w-10 h-10 bg-sky-500 rounded-lg flex items-center justify-center neon-border">
-                <svg class="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"></path></svg>
+                <svg class="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M13 10V3L4 14h7v7l9-11h-7z"></path></svg>
             </div>
-            <div>
-                <h1 class="text-xl font-bold tracking-tight">Amnezia <span class="text-sky-400">Master Hub</span></h1>
-                <p class="text-xs text-slate-400">Network monitoring & control</p>
-            </div>
+            <h1 class="text-xl font-bold tracking-tight">Amnezia <span class="text-sky-400">UI</span></h1>
         </div>
-        <div class="flex items-center space-x-6">
-            <div class="hidden md:block text-right">
-                <p class="text-[10px] uppercase text-slate-500 font-bold">Server Time</p>
-                <p class="text-sm font-mono tracking-tighter" id="clock">--:--:--</p>
-            </div>
-            <button onclick="location.reload()" class="bg-slate-800 hover:bg-slate-700 px-4 py-2 rounded-lg text-sm transition-all border border-slate-700">
-                Refresh
-            </button>
+        
+        <nav class="flex-1 space-y-2">
+            <a href="/" class="sidebar-item flex items-center space-x-3 px-4 py-3 {'active' if active_page=='dashboard' else 'text-slate-400'}">
+                <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6"></path></svg>
+                <span class="font-medium">Dashboard</span>
+            </a>
+            <a href="/inbounds" class="sidebar-item flex items-center space-x-3 px-4 py-3 {'active' if active_page=='inbounds' else 'text-slate-400'}">
+                <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"></path></svg>
+                <span class="font-medium">Inbounds</span>
+            </a>
+            <a href="/clients" class="sidebar-item flex items-center space-x-3 px-4 py-3 {'active' if active_page=='clients' else 'text-slate-400'}">
+                <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z"></path></svg>
+                <span class="font-medium">Clients</span>
+            </a>
+        </nav>
+        
+        <div class="pt-6 border-t border-slate-800">
+            <a href="/logout" class="flex items-center space-x-3 px-4 py-3 text-slate-500 hover:text-red-400 transition-colors">
+                <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1"></path></svg>
+                <span class="font-medium">Logout</span>
+            </a>
         </div>
-    </header>
+    </aside>
 
-    <main class="max-w-7xl mx-auto p-6 space-y-8">
-        <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+    <!-- Content -->
+    <main class="flex-1 ml-64 p-8">
+        {content}
+    </main>
+</body>
+</html>
+"""
+
+@app.route("/")
+@login_required
+def index():
+    """Premium Dashboard (v2.0)."""
+    with get_db() as conn:
+        rows = conn.execute("SELECT * FROM nodes").fetchall()
+        ui_stats = {}
+        for n in rows:
+            ui_stats[n['name']] = {
+                "ip": n['ip'],
+                "status": n['status'],
+                "mode": n['mode'],
+                "last_seen": n['last_seen'],
+                "data": json.loads(n['settings'] or '{}')
+            }
+
+    content = render_template_string("""
+        <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
             <div class="glass p-6 rounded-2xl">
                 <p class="text-slate-400 text-xs font-bold uppercase tracking-wider">Nodes Total</p>
-                <div class="flex items-end space-x-2 mt-2">
-                    <span class="text-4xl font-bold">{{ stats|length }}</span>
-                </div>
+                <span class="text-4xl font-bold mt-2 block">{{ stats|length }}</span>
             </div>
             <div class="glass p-6 rounded-2xl">
-                <p class="text-slate-400 text-xs font-bold uppercase tracking-wider">Aggregate Download</p>
+                <p class="text-slate-400 text-xs font-bold uppercase tracking-wider">Aggregate Down</p>
                 <div class="flex items-end space-x-2 mt-2">
                     <span class="text-4xl font-bold" id="total-down">0.0</span>
                     <span class="text-slate-400 text-sm mb-1">MB/s</span>
                 </div>
             </div>
             <div class="glass p-6 rounded-2xl">
-                <p class="text-slate-400 text-xs font-bold uppercase tracking-wider">Aggregate Upload</p>
+                <p class="text-slate-400 text-xs font-bold uppercase tracking-wider">Aggregate Up</p>
                 <div class="flex items-end space-x-2 mt-2">
                     <span class="text-4xl font-bold" id="total-up">0.0</span>
                     <span class="text-slate-400 text-sm mb-1">MB/s</span>
                 </div>
             </div>
             <div class="glass p-6 rounded-2xl">
-                <p class="text-slate-400 text-xs font-bold uppercase tracking-wider">Avg Latency</p>
-                <div class="flex items-end space-x-2 mt-2">
-                    <span class="text-4xl font-bold">--</span>
-                    <span class="text-sky-400 text-sm mb-1">ms</span>
+                <p class="text-slate-400 text-xs font-bold uppercase tracking-wider">Status</p>
+                <span class="text-xl font-bold mt-2 block text-green-400">System Healthy</span>
+            </div>
+        </div>
+
+        <div class="glass p-6 rounded-2xl mb-8">
+            <h2 class="text-lg font-semibold mb-6 flex items-center">
+                <span class="w-2 h-2 bg-sky-500 rounded-full mr-2"></span> Network Throughput
+            </h2>
+            <div class="h-[260px] w-full"><canvas id="trafficChart"></canvas></div>
+        </div>
+
+        <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+            {% for name, node in stats.items() %}
+            <div class="glass p-6 rounded-2xl hover:neon-border transition-all">
+                <div class="flex justify-between items-start mb-4">
+                    <div>
+                        <h3 class="font-bold text-lg text-sky-400">{{ name }}</h3>
+                        <p class="text-xs text-slate-400 font-mono">{{ node.ip }}</p>
+                    </div>
+                    <span class="px-3 py-1 bg-sky-500/10 text-sky-400 text-[10px] font-bold rounded-full border border-sky-500/20 uppercase">{{ node.status }}</span>
+                </div>
+                <div class="flex justify-between text-sm py-2">
+                    <span class="text-slate-400">CPU/RAM:</span>
+                    <span class="font-bold">{{ node.data.cpu or '0' }}% / {{ node.data.mem or '0' }}%</span>
+                </div>
+                <div class="flex justify-between text-sm py-2">
+                    <span class="text-slate-400">Traffic:</span>
+                    <span class="font-medium">↓{{ node.data.net_in or '0' }} | ↑{{ node.data.net_out or '0' }}</span>
                 </div>
             </div>
+            {% endfor %}
         </div>
-
-        <div class="glass p-6 rounded-2xl">
-            <div class="flex items-center justify-between mb-6">
-                <h2 class="text-lg font-semibold flex items-center">
-                    <span class="w-2 h-2 bg-sky-500 rounded-full mr-2"></span>
-                    Network Throughput (Total)
-                </h2>
-            </div>
-            <div class="h-[260px] w-full">
-                <canvas id="trafficChart"></canvas>
-            </div>
-        </div>
-
-        <div>
-            <h2 class="text-xl font-bold mb-4">Connected Nodes</h2>
-            <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                {% for name, node in stats.items() %}
-                <div class="glass p-6 rounded-2xl hover:neon-border transition-all group">
-                    <div class="flex justify-between items-start mb-4">
-                        <div class="flex items-center space-x-3">
-                            <div class="w-12 h-12 bg-slate-800 rounded-xl flex items-center justify-center text-xl">🌐</div>
-                            <div>
-                                <h3 class="font-bold text-lg group-hover:text-sky-400 transition-colors">{{ name }}</h3>
-                                <p class="text-xs text-slate-400 font-mono">{{ node.ip }}</p>
-                            </div>
-                        </div>
-                        <span class="px-3 py-1 bg-sky-500/10 text-sky-400 text-[10px] font-bold rounded-full border border-sky-500/20 uppercase">
-                            {{ node.status }}
-                        </span>
-                    </div>
-                    
-                    <div class="grid grid-cols-3 gap-4 border-y border-slate-800/50 py-4 my-4">
-                        <div class="text-center">
-                            <p class="text-[10px] uppercase tracking-wider text-slate-500">CPU</p>
-                            <p class="text-lg font-bold">{{ node.data.cpu or '—' }}<span class="text-xs text-slate-500 font-normal">%</span></p>
-                        </div>
-                        <div class="text-center border-x border-slate-800/50">
-                            <p class="text-[10px] uppercase tracking-wider text-slate-500">RAM</p>
-                            <p class="text-lg font-bold">{{ node.data.mem or '—' }}<span class="text-xs text-slate-500 font-normal">%</span></p>
-                        </div>
-                        <div class="text-center">
-                            <p class="text-[10px] uppercase tracking-wider text-slate-500">Mode</p>
-                            <p class="text-lg font-bold text-sky-400">{{ node.mode }}</p>
-                        </div>
-                    </div>
-
-                    <div class="flex justify-between items-center">
-                        <div class="flex items-center space-x-4">
-                            <div class="flex items-center">
-                                <svg class="w-4 h-4 text-sky-400 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M19 14l-7 7m0 0l-7-7m7 7V3"></path></svg>
-                                <span class="text-sm font-semibold">{{ node.data.net_in or '0' }}</span>
-                            </div>
-                            <div class="flex items-center">
-                                <svg class="w-4 h-4 text-purple-400 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M5 10l7-7m0 0l7 7m-7-7v18"></path></svg>
-                                <span class="text-sm font-semibold">{{ node.data.net_out or '0' }}</span>
-                            </div>
-                        </div>
-                        <p class="text-[10px] text-slate-500 italic">Seen: {{ node.last_seen | int }}</p>
-                    </div>
-                </div>
-                {% endfor %}
-            </div>
-        </div>
-    </main>
-
-    <script>
-        setInterval(() => {
-            const now = new Date();
-            document.getElementById('clock').innerText = now.toTimeString().split(' ')[0];
-        }, 1000);
-
-        const ctx = document.getElementById('trafficChart').getContext('2d');
-        const chart = new Chart(ctx, {
-            type: 'line',
-            data: {
-                labels: Array.from({length: 60}, (_, i) => i),
-                datasets: [
-                    { label: 'Download', data: [], borderColor: '#38bdf8', backgroundColor: 'rgba(56, 189, 248, 0.1)', fill: true, tension: 0.4, borderWidth: 2, pointRadius: 0 },
-                    { label: 'Upload', data: [], borderColor: '#a855f7', backgroundColor: 'rgba(168, 85, 247, 0.1)', fill: true, tension: 0.4, borderWidth: 2, pointRadius: 0 }
-                ]
-            },
-            options: {
-                responsive: true, maintainAspectRatio: false,
-                plugins: { legend: { display: false } },
-                scales: {
-                    y: { beginAtZero: true, grid: { color: 'rgba(255, 255, 255, 0.05)' }, ticks: { color: '#64748b' } },
-                    x: { display: false }
+        
+        <script>
+            const ctx = document.getElementById('trafficChart').getContext('2d');
+            const chart = new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels: Array.from({length: 60}, (_, i) => i),
+                    datasets: [
+                        { label: 'Download', data: [], borderColor: '#38bdf8', backgroundColor: 'rgba(56, 189, 248, 0.1)', fill: true, tension: 0.4, borderWidth: 2, pointRadius: 0 },
+                        { label: 'Upload', data: [], borderColor: '#a855f7', backgroundColor: 'rgba(168, 85, 247, 0.1)', fill: true, tension: 0.4, borderWidth: 2, pointRadius: 0 }
+                    ]
+                },
+                options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } },
+                    scales: { y: { beginAtZero: true, grid: { color: 'rgba(255, 255, 255, 0.05)' } }, x: { display: false } }
                 }
+            });
+            async function updateStats() {
+                try {
+                    const r = await fetch('/hub/history');
+                    const d = await r.json();
+                    chart.data.datasets[0].data = d.down;
+                    chart.data.datasets[1].data = d.up;
+                    chart.update('none');
+                    if (d.down.length > 0) {
+                        document.getElementById('total-down').innerText = d.down[d.down.length-1];
+                        document.getElementById('total-up').innerText = d.up[d.up.length-1];
+                    }
+                } catch(e) {}
             }
-        });
+            setInterval(updateStats, 5000); updateStats();
+        </script>
+    """, stats=ui_stats)
+    return get_base_template(content, 'dashboard')
 
-        async function updateStats() {
-            try {
-                const r = await fetch('/hub/history');
-                const d = await r.json();
-                chart.data.datasets[0].data = d.down;
-                chart.data.datasets[1].data = d.up;
-                chart.update('none');
-                
-                if (d.down.length > 0) {
-                    document.getElementById('total-down').innerText = d.down[d.down.length-1];
-                    document.getElementById('total-up').innerText = d.up[d.up.length-1];
-                }
-            } catch(e) {}
-        }
-        setInterval(updateStats, 5000);
-        updateStats();
-    </script>
-</body>
-</html>
-""", stats=node_stats)
+@app.route("/inbounds")
+@login_required
+def inbounds_page():
+    with get_db() as conn:
+        rows = conn.execute("SELECT * FROM nodes").fetchall()
+        nodes = [dict(r) for r in rows]
+    
+    content = render_template_string("""
+        <div class="flex justify-between items-center mb-6">
+            <h2 class="text-2xl font-bold">Inbounds Management</h2>
+            <button class="bg-sky-500 hover:bg-sky-600 px-4 py-2 rounded-lg text-sm font-bold transition-all">+ Add Node</button>
+        </div>
+        <div class="glass rounded-2xl overflow-hidden">
+            <table class="w-full text-left">
+                <thead class="bg-slate-800/50 text-slate-400 text-xs uppercase font-bold">
+                    <tr>
+                        <th class="px-6 py-4">Node Name</th>
+                        <th class="px-6 py-4">IP Address</th>
+                        <th class="px-6 py-4">Status</th>
+                        <th class="px-6 py-4">Protocol</th>
+                        <th class="px-6 py-4 text-right">Actions</th>
+                    </tr>
+                </thead>
+                <tbody class="divide-y divide-slate-800">
+                    {% for n in nodes %}
+                    <tr class="hover:bg-slate-800/30 transition-colors">
+                        <td class="px-6 py-4 font-semibold text-sky-400">{{ n.name }}</td>
+                        <td class="px-6 py-4 font-mono text-xs">{{ n.ip }}</td>
+                        <td class="px-6 py-4">
+                            <span class="px-2 py-0.5 rounded-full text-[10px] font-bold uppercase border border-sky-500/20 bg-sky-500/5 text-sky-400">{{ n.status }}</span>
+                        </td>
+                        <td class="px-6 py-4 text-sm">{{ n.mode }}</td>
+                        <td class="px-6 py-4 text-right space-x-2">
+                            <button class="text-xs text-slate-400 hover:text-white">Edit</button>
+                            <button class="text-xs text-red-400 hover:text-red-300">Remove</button>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    """, nodes=nodes)
+    return get_base_template(content, 'inbounds')
+
+@app.route("/clients")
+@login_required
+def clients_page():
+    with get_db() as conn:
+        rows = conn.execute("SELECT * FROM clients").fetchall()
+        clients = [dict(r) for r in rows]
+    
+    content = render_template_string("""
+        <div class="flex justify-between items-center mb-6">
+            <h2 class="text-2xl font-bold">Clients management</h2>
+            <button class="bg-sky-500 hover:bg-sky-600 px-4 py-2 rounded-lg text-sm font-bold transition-all">+ Add Client</button>
+        </div>
+        <div class="glass rounded-2xl overflow-hidden">
+            <table class="w-full text-left">
+                <thead class="bg-slate-800/50 text-slate-400 text-xs uppercase font-bold">
+                    <tr>
+                        <th class="px-6 py-4">User</th>
+                        <th class="px-6 py-4">Limit</th>
+                        <th class="px-6 py-4">Used</th>
+                        <th class="px-6 py-4">Expiry</th>
+                        <th class="px-6 py-4 text-right">Actions</th>
+                    </tr>
+                </thead>
+                <tbody class="divide-y divide-slate-800">
+                    {% for c in clients %}
+                    <tr class="hover:bg-slate-800/30 transition-colors">
+                        <td class="px-6 py-4 font-semibold">{{ c.username }}</td>
+                        <td class="px-6 py-4 text-sm">{{ c.traffic_limit or 'Unlimited' }}</td>
+                        <td class="px-6 py-4 text-sm">{{ c.traffic_used }}</td>
+                        <td class="px-6 py-4 text-sm text-slate-400">{{ c.expiry_time or 'Never' }}</td>
+                        <td class="px-6 py-4 text-right space-x-2">
+                            <button class="text-xs text-sky-400 hover:text-sky-300">QR Code</button>
+                            <button class="text-xs text-red-400 hover:text-red-300">Delete</button>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    """, clients=clients)
+    return get_base_template(content, 'clients')
 
 @app.route("/hub/history")
 def get_history():
@@ -392,15 +591,46 @@ def remove_node():
     if not ip:
         return jsonify({"status": "error", "message": "ip is required"}), 400
 
-    nodes = [n for n in load_nodes() if n.get("ip") != ip]
-    save_nodes(nodes)
-
-    name = data.get("name", ip)
+    with get_db() as conn:
+        conn.execute("DELETE FROM nodes WHERE ip = ?", (ip,))
+    
     with _lock:
-        node_stats.pop(name, None)
+        to_del = [name for name, info in node_stats.items() if info.get("ip") == ip]
+        for name in to_del:
+            node_stats.pop(name, None)
 
     return jsonify({"status": "ok", "message": f"Node {ip} removed"})
 
+
+# ─── Inbounds & Clients API ──────────────────────────────────────────────────
+
+@app.route("/hub/api/inbounds", methods=["GET"])
+@login_required
+def api_list_inbounds():
+    with get_db() as conn:
+        rows = conn.execute("SELECT * FROM inbounds").fetchall()
+        return jsonify([dict(r) for r in rows])
+
+@app.route("/hub/api/clients", methods=["GET"])
+@login_required
+def api_list_clients():
+    with get_db() as conn:
+        rows = conn.execute("SELECT * FROM clients").fetchall()
+        return jsonify([dict(r) for r in rows])
+
+@app.route("/hub/api/clients/add", methods=["POST"])
+@login_required
+def api_add_client():
+    data = request.get_json(force=True, silent=True) or {}
+    inbound_id = data.get("inbound_id")
+    username = data.get("username")
+    if not inbound_id or not username:
+        return jsonify({"status": "error", "message": "inbound_id and username required"}), 400
+    
+    with get_db() as conn:
+        conn.execute("INSERT INTO clients (inbound_id, username, secret) VALUES (?, ?, ?)",
+                   (inbound_id, username, data.get("secret", "")))
+    return jsonify({"status": "ok", "message": "Client added"})
 
 @app.errorhandler(404)
 def not_found(_):
@@ -415,8 +645,11 @@ def server_error(e):
 # ─── Entry point ─────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
-    log.info(f"Amnezia Master Hub v3 starting on port {PORT}")
-    log.info(f"Config file: {CONFIG_FILE}")
+    log.info(f"Amnezia Master Hub v2.0 starting on port {PORT}")
+    
+    init_db()
+    migrate_from_json()
+
     log.info(f"Poll interval: {POLL_SEC}s")
 
     # Start background poller
