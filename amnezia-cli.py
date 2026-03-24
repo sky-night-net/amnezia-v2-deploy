@@ -136,6 +136,8 @@ LOCALES = {
         "reg_fail":      "Хаб недоступен, пропускаю регистрацию",
         "invalid":       "Неверный выбор, попробуйте снова.",
         "no_ip":         "IP адрес не может быть пустым!",
+        "web_public_prompt": "Сделать веб-панель доступной из интернета (0.0.0.0)? (y/n)",
+        "hub_install_prompt": "Установить Master Hub на этот сервер? (y/n)",
     },
     "en": {
         "select_lang":   "Select Language (1: RU, 2: EN)",
@@ -196,6 +198,8 @@ LOCALES = {
         "reg_fail":      "Hub unreachable, skipping registration",
         "invalid":       "Invalid choice, please try again.",
         "no_ip":         "IP address cannot be empty!",
+        "web_public_prompt": "Make web panel accessible from internet (0.0.0.0)? (y/n)",
+        "hub_install_prompt": "Install Master Hub on this server? (y/n)",
     }
 }
 
@@ -353,9 +357,11 @@ class AmneziaDeployer:
         ok(L["cleanup_ok"])
 
     # ── Deploy VPN node ─────────────────────────────────────────────────────
-    def deploy(self, snmp_enabled: bool = False, hub_ip: str = ""):
+    def deploy(self, snmp_enabled: bool = False, hub_ip: str = "", public_web: bool = False):
         import secrets
         auth_token = secrets.token_hex(16)
+        
+        bind_ip = "0.0.0.0" if public_web else LOCAL_ONLY_WEB
 
         # 1. Hash password
         pw_hash = generate_hash(self.password)
@@ -376,7 +382,7 @@ class AmneziaDeployer:
             f"-e JC={self.stealth['JC']} -e JMIN={self.stealth['JMIN']} -e JMAX={self.stealth['JMAX']} "
             f"-e S1={self.stealth['S1']} -e S2={self.stealth['S2']} "
             f"-v ~/.amnezia-wg-easy:/etc/wireguard "
-            f"-p {LOCAL_ONLY_WEB}:{self.web_port}:{self.web_port}/tcp "
+            f"-p {bind_ip}:{self.web_port}:{self.web_port}/tcp "
             f"-p {self.vpn_port}:{self.vpn_port}/udp "
             f"--cap-add=NET_ADMIN --cap-add=SYS_MODULE "
             f"--sysctl net.ipv4.conf.all.src_valid_mark=1 "
@@ -404,6 +410,8 @@ class AmneziaDeployer:
         self.run_quiet(f"ufw allow {self.vpn_port}/udp")
         if snmp_enabled:
             self.run_quiet("ufw allow 161/udp")
+        if public_web:
+            self.run_quiet(f"ufw allow {self.web_port}/tcp")
         self.run_quiet("echo y | ufw enable")
         ok("Firewall configured")
 
@@ -451,8 +459,12 @@ class AmneziaDeployer:
 
         separator()
         print(f"\n  {GREEN}{BOLD}{L['success']}{RESET}")
-        print(f"  {DIM}Web panel: ssh -L {self.web_port}:{LOCAL_ONLY_WEB}:{self.web_port} root@{self.ip}")
-        print(f"  Then open: http://localhost:{self.web_port}{RESET}\n")
+        if public_web:
+            print(f"  {DIM}Web panel: http://{self.ip}:{self.web_port}")
+        else:
+            print(f"  {DIM}Web panel: ssh -L {self.web_port}:{LOCAL_ONLY_WEB}:{self.web_port} root@{self.ip}")
+            print(f"  Then open: http://localhost:{self.web_port}")
+        print(f"{RESET}\n")
         return True
 
     # ── Status ──────────────────────────────────────────────────────────────
@@ -759,19 +771,29 @@ def run_cli():
             ext_ip   = get_input(L["extip_prompt"],   server_ip)
             web_port = get_input(L["webport_prompt"],  DEFAULT_WEB_PORT)
             vpn_port = get_input(L["vpnport_prompt"],  DEFAULT_VPN_PORT)
+            
+            web_pub_ans = get_input(L["web_public_prompt"], "n")
+            public_web = (web_pub_ans.lower() == "y")
+            
             snmp_ans = get_input(L["snmp_prompt"],     "n")
+            
+            hub_local_ans = get_input(L["hub_install_prompt"], "n")
+            install_hub = (hub_local_ans.lower() == "y")
+            
             hub_ip   = get_input(L["hub_ip_prompt"],   "")
 
             deployer = AmneziaDeployer(server_ip, server_pw, ext_ip, web_port, vpn_port)
             if deployer.connect():
                 deployer.cleanup()
-                snmp_val = False
-                if snmp_ans:
-                    snmp_val = (snmp_ans.lower() == "y")
-                deployer.deploy(
+                snmp_val = (snmp_ans.lower() == "y")
+                
+                if deployer.deploy(
                     snmp_enabled=snmp_val,
-                    hub_ip=hub_ip
-                )
+                    hub_ip=hub_ip,
+                    public_web=public_web
+                ):
+                    if install_hub:
+                        deployer.setup_hub(remote=True)
         else:
             deployer = AmneziaDeployer(server_ip, server_pw)
             if not deployer.connect():
