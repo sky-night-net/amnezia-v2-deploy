@@ -147,6 +147,7 @@ LOCALES = {
         "h_s1":          "S1: размер первого фрагмента пакета.",
         "h_s2":          "S2: размер второго фрагмента пакета.",
         "h_h":           "Уникальный 4-байтовый заголовок.",
+        "clean_hub_prompt": "Удалить также Master Hub? (y/n)",
     },
     "en": {
         "select_lang":   "Select Language (1: RU, 2: EN)",
@@ -218,6 +219,7 @@ LOCALES = {
         "h_s1":          "S1: size of the first packet fragment.",
         "h_s2":          "S2: size of the second packet fragment.",
         "h_h":           "Unique 4-byte header.",
+        "clean_hub_prompt": "Remove Master Hub as well? (y/n)",
     }
 }
 
@@ -368,12 +370,20 @@ class AmneziaDeployer:
         ok("Docker ready")
 
     # ── Cleanup ─────────────────────────────────────────────────────────────
-    def cleanup(self):
+    def cleanup(self, full=False):
         step(L["cleanup_msg"])
-        containers = ["amnezia-wg-easy", "amnezia-snmp", "amnezia-hub"]
+        containers = ["amnezia-wg-easy", "amnezia-snmp"]
+        if full: containers.append("amnezia-hub")
+        
         for c in containers:
             self.run_quiet(f"docker stop {c} 2>/dev/null; docker rm {c} 2>/dev/null")
-        self.run_quiet("rm -rf ~/.amnezia-wg-easy /opt/amnezia-hub")
+            
+        rm_paths = ["~/.amnezia-wg-easy"]
+        if full: 
+            rm_paths.append("/opt/amnezia-hub")
+            self.run_quiet("ufw disable")
+            
+        self.run_quiet(f"rm -rf {' '.join(rm_paths)}")
         ok(L["cleanup_ok"])
 
     # ── Deploy VPN node ─────────────────────────────────────────────────────
@@ -872,7 +882,8 @@ def run_cli():
             elif choice == "6":
                 confirm = get_input("Are you sure? (yes/no)", "no")
                 if confirm.lower() in ("y", "yes", "д", "да"):
-                    deployer.cleanup()
+                    include_hub = get_input(L["clean_hub_prompt"], "n")
+                    deployer.cleanup(full=(include_hub.lower() == "y"))
 
         input(f"\n  {DIM}Press Enter to continue...{RESET}")
 
