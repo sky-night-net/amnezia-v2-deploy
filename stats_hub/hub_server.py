@@ -12,8 +12,9 @@ import time
 import threading
 import logging
 
-from flask import Flask, jsonify, request, Response, redirect, render_template_string
+from flask import Flask, jsonify, request, Response, redirect, render_template, render_template_string
 from flask_cors import CORS
+from collections import deque
 
 try:
     import requests as req_lib
@@ -38,6 +39,11 @@ POLL_SEC    = int(os.getenv("POLL_INTERVAL", "15"))
 
 # In-memory state
 node_stats: dict = {}
+history_size = 60
+traffic_history = {
+    "down": deque([0]*history_size, maxlen=history_size),
+    "up":   deque([0]*history_size, maxlen=history_size)
+}
 _lock = threading.Lock()
 
 # ─── Config helpers ──────────────────────────────────────────────────────────
@@ -124,49 +130,225 @@ def poll_nodes():
             with _lock:
                 node_stats[name] = result
 
+        # 3. Update aggregate history
+        total_down = 0.0
+        total_up = 0.0
+        with _lock:
+            for n in node_stats.values():
+                d = n.get("data", {})
+                # Try to parse strings like "1.2 MB/s" or "400 KB/s"
+                for k, v in [("net_in", "down"), ("net_out", "up")]:
+                    val_str = str(d.get(k, "0"))
+                    try:
+                        num = float(val_str.split()[0])
+                        if "MB" in val_str: num *= 1024
+                        if k == "net_in": total_down += float(num)
+                        else: total_up += float(num)
+                    except (ValueError, IndexError, TypeError): pass
+            
+            traffic_history["down"].append(round(total_down / 1024, 2))
+            traffic_history["up"].append(round(total_up / 1024, 2))
+
         time.sleep(POLL_SEC)
 
 # ─── Routes ──────────────────────────────────────────────────────────────────
 @app.route("/")
 def index():
-    """Redirect to stats or show simple UI."""
-    return render_template_string("""
-    <!DOCTYPE html>
-    <html>
-    <head>
-        <title>Amnezia V2 Master Hub</title>
-        <meta name="viewport" content="width=device-width, initial-scale=1">
-        <style>
-            body { font-family: -apple-system, sans-serif; background: #1a1b1e; color: #eee; padding: 20px; }
-            .node { background: #25262b; border-radius: 8px; padding: 15px; margin-bottom: 20px; border: 1px solid #373a40; }
-            .online { color: #40c057; } .offline { color: #fa5252; } .snmp { color: #228be6; }
-            .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 20px; }
-            h1 { color: #fff; border-bottom: 1px solid #333; padding-bottom: 10px; }
-            .stat { font-size: 0.9em; margin-top: 5px; color: #a5a5a5; }
-            b { color: #fff; }
-        </style>
-    </head>
-    <body>
-        <h1>🔭 Amnezia V2 Master Hub</h1>
-        <div class="grid">
-        {% for name, node in stats.items() %}
-            <div class="node">
-                <h3>{{ name }} <span class="{{ node.status.lower() }}">●</span></h3>
-                <div class="stat">IP: <b>{{ node.ip }}</b></div>
-                <div class="stat">Status: <b>{{ node.status }}</b> (via {{ node.mode }})</div>
-                {% if node.data %}
-                    <div class="stat">CPU: {{ node.data.cpu or '—' }}% | RAM: {{ node.data.mem or '—' }}%</div>
-                    <div class="stat">Traffic: ↓{{ node.data.net_in or '—' }} | ↑{{ node.data.net_out or '—' }}</div>
-                {% endif %}
-                <div class="stat">Updated: {{ node.last_seen | int }}</div>
+    """Premium Dashboard."""
+    return render_template_string(r"""
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Amnezia V2 Master Hub</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        body { font-family: 'Inter', sans-serif; background-color: #0f172a; color: #f8fafc; }
+        .glass { background: rgba(30, 41, 59, 0.7); backdrop-filter: blur(12px); border: 1px solid rgba(255, 255, 255, 0.1); }
+        .neon-border { box-shadow: 0 0 15px rgba(56, 189, 248, 0.1); border: 1px solid rgba(56, 189, 248, 0.2); }
+        .status-online { color: #4ade80; }
+        .status-offline { color: #f87171; }
+        .status-snmp { color: #38bdf8; }
+        ::-webkit-scrollbar { width: 8px; }
+        ::-webkit-scrollbar-track { background: #1e293b; }
+        ::-webkit-scrollbar-thumb { background: #334155; border-radius: 4px; }
+    </style>
+</head>
+<body class="min-h-screen pb-12">
+    <header class="glass sticky top-0 z-50 px-6 py-4 flex items-center justify-between border-b border-slate-800">
+        <div class="flex items-center space-x-3">
+            <div class="w-10 h-10 bg-sky-500 rounded-lg flex items-center justify-center neon-border">
+                <svg class="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"></path></svg>
             </div>
-        {% endfor %}
+            <div>
+                <h1 class="text-xl font-bold tracking-tight">Amnezia <span class="text-sky-400">Master Hub</span></h1>
+                <p class="text-xs text-slate-400">Network monitoring & control</p>
+            </div>
         </div>
-        <p style="text-align:center; font-size:0.8em; color:#555">Auto-refresh every 15s</p>
-        <script>setTimeout(() => location.reload(), 15000);</script>
-    </body>
-    </html>
-    """, stats=node_stats)
+        <div class="flex items-center space-x-6">
+            <div class="hidden md:block text-right">
+                <p class="text-[10px] uppercase text-slate-500 font-bold">Server Time</p>
+                <p class="text-sm font-mono tracking-tighter" id="clock">--:--:--</p>
+            </div>
+            <button onclick="location.reload()" class="bg-slate-800 hover:bg-slate-700 px-4 py-2 rounded-lg text-sm transition-all border border-slate-700">
+                Refresh
+            </button>
+        </div>
+    </header>
+
+    <main class="max-w-7xl mx-auto p-6 space-y-8">
+        <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+            <div class="glass p-6 rounded-2xl">
+                <p class="text-slate-400 text-xs font-bold uppercase tracking-wider">Nodes Total</p>
+                <div class="flex items-end space-x-2 mt-2">
+                    <span class="text-4xl font-bold">{{ stats|length }}</span>
+                </div>
+            </div>
+            <div class="glass p-6 rounded-2xl">
+                <p class="text-slate-400 text-xs font-bold uppercase tracking-wider">Aggregate Download</p>
+                <div class="flex items-end space-x-2 mt-2">
+                    <span class="text-4xl font-bold" id="total-down">0.0</span>
+                    <span class="text-slate-400 text-sm mb-1">MB/s</span>
+                </div>
+            </div>
+            <div class="glass p-6 rounded-2xl">
+                <p class="text-slate-400 text-xs font-bold uppercase tracking-wider">Aggregate Upload</p>
+                <div class="flex items-end space-x-2 mt-2">
+                    <span class="text-4xl font-bold" id="total-up">0.0</span>
+                    <span class="text-slate-400 text-sm mb-1">MB/s</span>
+                </div>
+            </div>
+            <div class="glass p-6 rounded-2xl">
+                <p class="text-slate-400 text-xs font-bold uppercase tracking-wider">Avg Latency</p>
+                <div class="flex items-end space-x-2 mt-2">
+                    <span class="text-4xl font-bold">--</span>
+                    <span class="text-sky-400 text-sm mb-1">ms</span>
+                </div>
+            </div>
+        </div>
+
+        <div class="glass p-6 rounded-2xl">
+            <div class="flex items-center justify-between mb-6">
+                <h2 class="text-lg font-semibold flex items-center">
+                    <span class="w-2 h-2 bg-sky-500 rounded-full mr-2"></span>
+                    Network Throughput (Total)
+                </h2>
+            </div>
+            <div class="h-[260px] w-full">
+                <canvas id="trafficChart"></canvas>
+            </div>
+        </div>
+
+        <div>
+            <h2 class="text-xl font-bold mb-4">Connected Nodes</h2>
+            <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                {% for name, node in stats.items() %}
+                <div class="glass p-6 rounded-2xl hover:neon-border transition-all group">
+                    <div class="flex justify-between items-start mb-4">
+                        <div class="flex items-center space-x-3">
+                            <div class="w-12 h-12 bg-slate-800 rounded-xl flex items-center justify-center text-xl">🌐</div>
+                            <div>
+                                <h3 class="font-bold text-lg group-hover:text-sky-400 transition-colors">{{ name }}</h3>
+                                <p class="text-xs text-slate-400 font-mono">{{ node.ip }}</p>
+                            </div>
+                        </div>
+                        <span class="px-3 py-1 bg-sky-500/10 text-sky-400 text-[10px] font-bold rounded-full border border-sky-500/20 uppercase">
+                            {{ node.status }}
+                        </span>
+                    </div>
+                    
+                    <div class="grid grid-cols-3 gap-4 border-y border-slate-800/50 py-4 my-4">
+                        <div class="text-center">
+                            <p class="text-[10px] uppercase tracking-wider text-slate-500">CPU</p>
+                            <p class="text-lg font-bold">{{ node.data.cpu or '—' }}<span class="text-xs text-slate-500 font-normal">%</span></p>
+                        </div>
+                        <div class="text-center border-x border-slate-800/50">
+                            <p class="text-[10px] uppercase tracking-wider text-slate-500">RAM</p>
+                            <p class="text-lg font-bold">{{ node.data.mem or '—' }}<span class="text-xs text-slate-500 font-normal">%</span></p>
+                        </div>
+                        <div class="text-center">
+                            <p class="text-[10px] uppercase tracking-wider text-slate-500">Mode</p>
+                            <p class="text-lg font-bold text-sky-400">{{ node.mode }}</p>
+                        </div>
+                    </div>
+
+                    <div class="flex justify-between items-center">
+                        <div class="flex items-center space-x-4">
+                            <div class="flex items-center">
+                                <svg class="w-4 h-4 text-sky-400 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M19 14l-7 7m0 0l-7-7m7 7V3"></path></svg>
+                                <span class="text-sm font-semibold">{{ node.data.net_in or '0' }}</span>
+                            </div>
+                            <div class="flex items-center">
+                                <svg class="w-4 h-4 text-purple-400 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M5 10l7-7m0 0l7 7m-7-7v18"></path></svg>
+                                <span class="text-sm font-semibold">{{ node.data.net_out or '0' }}</span>
+                            </div>
+                        </div>
+                        <p class="text-[10px] text-slate-500 italic">Seen: {{ node.last_seen | int }}</p>
+                    </div>
+                </div>
+                {% endfor %}
+            </div>
+        </div>
+    </main>
+
+    <script>
+        setInterval(() => {
+            const now = new Date();
+            document.getElementById('clock').innerText = now.toTimeString().split(' ')[0];
+        }, 1000);
+
+        const ctx = document.getElementById('trafficChart').getContext('2d');
+        const chart = new Chart(ctx, {
+            type: 'line',
+            data: {
+                labels: Array.from({length: 60}, (_, i) => i),
+                datasets: [
+                    { label: 'Download', data: [], borderColor: '#38bdf8', backgroundColor: 'rgba(56, 189, 248, 0.1)', fill: true, tension: 0.4, borderWidth: 2, pointRadius: 0 },
+                    { label: 'Upload', data: [], borderColor: '#a855f7', backgroundColor: 'rgba(168, 85, 247, 0.1)', fill: true, tension: 0.4, borderWidth: 2, pointRadius: 0 }
+                ]
+            },
+            options: {
+                responsive: true, maintainAspectRatio: false,
+                plugins: { legend: { display: false } },
+                scales: {
+                    y: { beginAtZero: true, grid: { color: 'rgba(255, 255, 255, 0.05)' }, ticks: { color: '#64748b' } },
+                    x: { display: false }
+                }
+            }
+        });
+
+        async function updateStats() {
+            try {
+                const r = await fetch('/hub/history');
+                const d = await r.json();
+                chart.data.datasets[0].data = d.down;
+                chart.data.datasets[1].data = d.up;
+                chart.update('none');
+                
+                if (d.down.length > 0) {
+                    document.getElementById('total-down').innerText = d.down[d.down.length-1];
+                    document.getElementById('total-up').innerText = d.up[d.up.length-1];
+                }
+            } catch(e) {}
+        }
+        setInterval(updateStats, 5000);
+        updateStats();
+    </script>
+</body>
+</html>
+""", stats=node_stats)
+
+@app.route("/hub/history")
+def get_history():
+    """Return traffic history for charts."""
+    with _lock:
+        return jsonify({
+            "down": list(traffic_history["down"]),
+            "up":   list(traffic_history["up"])
+        })
 
 @app.route("/hub/health")
 def health():
