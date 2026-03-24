@@ -20,22 +20,22 @@ Write-Host "[1/3] Checking dependencies..." -ForegroundColor Cyan
 
 # Check Python3 or Python
 $pythonCmd = "python"
-if (-not (Get-Command "python3" -ErrorAction SilentlyContinue)) {
-    if (-not (Get-Command "python" -ErrorAction SilentlyContinue)) {
-        Write-Host ""
-        Write-Host "[✗] Python is not installed or not in your PATH." -ForegroundColor Red
-        Write-Host "Please download Python from https://www.python.org/downloads/" -ForegroundColor Yellow
-        Write-Host "CRITICAL: Check the box 'Add Python to PATH' during installation!" -ForegroundColor Yellow
-        Write-Host "Or install via winget: winget install Python.Python.3.11" -ForegroundColor Gray
-        Write-Host ""
-        Read-Host "Press Enter to close this window..."
-        return
-    }
-} else {
+if (Get-Command "python3" -ErrorAction SilentlyContinue) {
     $pythonCmd = "python3"
 }
 
-$pyVer = & $pythonCmd --version
+$pyVer = & $pythonCmd --version 2>&1
+if ($LASTEXITCODE -ne 0 -or [string]$pyVer -match "was not found") {
+    Write-Host ""
+    Write-Host "[✗] Python is not installed or not in your PATH." -ForegroundColor Red
+    Write-Host "Please download Python from https://www.python.org/downloads/" -ForegroundColor Yellow
+    Write-Host "CRITICAL: Check the box 'Add Python to PATH' during installation!" -ForegroundColor Yellow
+    Write-Host "Or install via winget: winget install Python.Python.3.11" -ForegroundColor Gray
+    Write-Host ""
+    Read-Host "Press Enter to close this window..."
+    return
+}
+
 Write-Host "[✓] $pyVer" -ForegroundColor Green
 
 # Check Git
@@ -84,7 +84,7 @@ try {
 }
 
 # Create a local .bat script for easy access
-$BatPath = "$InstallDir\amnezia.bat"
+$BatPath = "$InstallDir\amneziav2.bat"
 $BatContent = "@echo off`r`ncd /d `"$InstallDir`"`r`n$pythonCmd amnezia-cli.py %*"
 Set-Content -Path $BatPath -Value $BatContent
 
