@@ -138,6 +138,8 @@ LOCALES = {
         "no_ip":         "IP адрес не может быть пустым!",
         "web_public_prompt": "Сделать веб-панель доступной из интернета (0.0.0.0)? (y/n)",
         "hub_install_prompt": "Установить Master Hub на этот сервер? (y/n)",
+        "subnet_prompt": "Подсеть VPN (например, 10.8.0.0/24)",
+        "adv_stealth_prompt": "Настроить параметры обфускации (Advanced Stealth)? (y/n)",
     },
     "en": {
         "select_lang":   "Select Language (1: RU, 2: EN)",
@@ -200,6 +202,8 @@ LOCALES = {
         "no_ip":         "IP address cannot be empty!",
         "web_public_prompt": "Make web panel accessible from internet (0.0.0.0)? (y/n)",
         "hub_install_prompt": "Install Master Hub on this server? (y/n)",
+        "subnet_prompt": "VPN Subnet (e.g., 10.8.0.0/24)",
+        "adv_stealth_prompt": "Configure Advanced Stealth parameters? (y/n)",
     }
 }
 
@@ -357,11 +361,14 @@ class AmneziaDeployer:
         ok(L["cleanup_ok"])
 
     # ── Deploy VPN node ─────────────────────────────────────────────────────
-    def deploy(self, snmp_enabled: bool = False, hub_ip: str = "", public_web: bool = False):
+    def deploy(self, snmp_enabled: bool = False, hub_ip: str = "", 
+               public_web: bool = False, subnet: str = "10.8.0.0/24",
+               stealth: dict | None = None):
         import secrets
         auth_token = secrets.token_hex(16)
         
         bind_ip = "0.0.0.0" if public_web else LOCAL_ONLY_WEB
+        stealth_params = stealth or self.stealth
 
         # 1. Hash password
         pw_hash = generate_hash(self.password)
@@ -379,8 +386,11 @@ class AmneziaDeployer:
             f"-e PORT={self.web_port} "
             f"-e WG_PORT={self.vpn_port} "
             f"-e EXPERIMENTAL_AWG=true "
-            f"-e JC={self.stealth['JC']} -e JMIN={self.stealth['JMIN']} -e JMAX={self.stealth['JMAX']} "
-            f"-e S1={self.stealth['S1']} -e S2={self.stealth['S2']} "
+            f"-e JC={stealth_params['JC']} -e JMIN={stealth_params['JMIN']} -e JMAX={stealth_params['JMAX']} "
+            f"-e S1={stealth_params['S1']} -e S2={stealth_params['S2']} "
+            f"-e H1={stealth_params['H1']} -e H2={stealth_params['H2']} "
+            f"-e H3={stealth_params['H3']} -e H4={stealth_params['H4']} "
+            f"-e WG_DEFAULT_ADDRESS={subnet} "
             f"-v ~/.amnezia-wg-easy:/etc/wireguard "
             f"-p {bind_ip}:{self.web_port}:{self.web_port}/tcp "
             f"-p {self.vpn_port}:{self.vpn_port}/udp "
@@ -775,6 +785,14 @@ def run_cli():
             web_pub_ans = get_input(L["web_public_prompt"], "n")
             public_web = (web_pub_ans.lower() == "y")
             
+            vpn_subnet = get_input(L["subnet_prompt"], "10.8.0.0/24")
+            
+            stealth_dict = DEFAULT_STEALTH.copy()
+            adv_ans = get_input(L["adv_stealth_prompt"], "n")
+            if adv_ans.lower() == "y":
+                for k in stealth_dict:
+                    stealth_dict[k] = get_input(f"  - {k}", stealth_dict[k])
+
             snmp_ans = get_input(L["snmp_prompt"],     "n")
             
             hub_local_ans = get_input(L["hub_install_prompt"], "n")
@@ -787,13 +805,24 @@ def run_cli():
                 deployer.cleanup()
                 snmp_val = (snmp_ans.lower() == "y")
                 
+                # Если Хаб ставится на этот же сервер, ставим его ДО деплоя VPN,
+                # чтобы регистрация в Hub прошла успешно.
+                if install_hub and (not hub_ip or hub_ip == server_ip):
+                    deployer.setup_hub(remote=True)
+                    hub_ip = server_ip
+
                 if deployer.deploy(
                     snmp_enabled=snmp_val,
                     hub_ip=hub_ip,
-                    public_web=public_web
+                    public_web=public_web,
+                    subnet=vpn_subnet,
+                    stealth=stealth_dict
                 ):
-                    if install_hub:
-                        deployer.setup_hub(remote=True)
+                    # Если Хаб ставится на другой сервер, ставим его после (хотя обычно наоборот)
+                    # Но если он уже стоит (install_hub был True и мы его уже поставили выше), 
+                    # то повторно не вызываем.
+                    if install_hub and hub_ip != server_ip:
+                         deployer.setup_hub(remote=True)
         else:
             deployer = AmneziaDeployer(server_ip, server_pw)
             if not deployer.connect():
