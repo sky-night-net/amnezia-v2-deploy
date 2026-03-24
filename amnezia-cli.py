@@ -13,6 +13,27 @@ CYAN = "\033[96m"
 BOLD = "\033[1m"
 RESET = "\033[0m"
 
+# --- App Logic ---
+IMAGE = "ghcr.io/w0rng/amnezia-wg-easy"
+DEFAULT_VPN_PORT = "993"
+DEFAULT_WEB_PORT = "4466"
+LOCAL_WEB_IP = "127.0.0.1"
+
+DEFAULT_STEALTH = {
+    "JC": "10", "JMIN": "100", "JMAX": "1000",
+    "S1": "15", "S2": "100",
+    "H1": "1234567891", "H2": "1234567892", "H3": "1234567893", "H4": "1234567894"
+}
+
+def install_dependencies():
+    try:
+        import paramiko
+        import bcrypt
+    except ImportError:
+        print(f"{YELLOW}[!] Установка необходимых библиотек (paramiko, bcrypt)...{RESET}")
+        subprocess.check_call([sys.executable, "-m", "pip", "install", "paramiko", "bcrypt"])
+        print(f"{GREEN}[+] Библиотеки установлены. Проверка завершена.{RESET}")
+
 def get_input(prompt, default=""):
     # Форматируем промпт красиво
     formatted_prompt = f"{BOLD}{CYAN}➤ {prompt}{RESET} {YELLOW}[{default}]{RESET}: "
