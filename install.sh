@@ -35,4 +35,4 @@ pip3 install -r requirements.txt --break-system-packages &> /dev/null
 
 # 4. Запуск основного Terminal App
 echo -e "${GREEN}[+] Запуск интерактивного мастера...${NC}"
-python3 amnezia-cli.py
+python3 amnezia-cli.py </dev/tty
