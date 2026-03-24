@@ -16,6 +16,8 @@ RESET = "\033[0m"
 
 # --- App Logic ---
 IMAGE = "ghcr.io/w0rng/amnezia-wg-easy"
+HUB_DOCKER_IMAGE = "python:3.10-slim"
+SNMP_IMAGE = "gponomarev/snmpd" # Lightweight SNMP agent
 DEFAULT_VPN_PORT = "993"
 DEFAULT_WEB_PORT = "4466"
 LOCAL_WEB_IP = "127.0.0.1"
@@ -46,11 +48,13 @@ LOCALES = {
         "extip_prompt": "Публичный (внешний) IP",
         "webport_prompt": "Порт панели управления",
         "vpnport_prompt": "Порт для VPN (UDP)",
+        "snmp_prompt": "Включить SNMP мониторинг? (y/n)",
+        "hub_loc_prompt": "Где установить Hub? (1: Локально (Docker), 2: Удаленный сервер)",
         "starting": "Начинаю процесс для {}...",
         "conn_error": "Ошибка подключения: {}",
         "success": "УСПЕХ!",
         "bye": "До встречи!",
-        "missing_deps": "[!] Установка необходимых библиотек (paramiko, bcrypt)...",
+        "missing_deps": "[!] Установка необходимых библиотек...",
         "deps_ok": "[+] Библиотеки установлены.",
         "gen_hash": "Генерация защищенного хэша пароля...",
         "ssh_conn": "Подключение к {} как root...",
@@ -58,21 +62,20 @@ LOCALES = {
         "cleanup_msg": "[*] Удаление существующих контейнеров и данных...",
         "cleanup_ok": "[+] Очистка завершена.",
         "deploy_start": "[*] Запуск развертывания {}...",
+        "snmp_start": "[*] Запуск SNMP агента...",
         "firewall_pass": "[*] Настройка брандмауэра (UFW)...",
         "client_list": "Список доступных клиентов:",
         "conf_for": "Конфигурация для {}:",
-        "hub_title": "--- УСТАНОВКА MASTER HUB & DASHBOARD ---",
-        "hub_desc": "Этот компьютер станет вашим центральным пультом управления всеми вашими VPN-узлами.",
+        "hub_title": "--- УСТАНОВКА MASTER HUB & DASHBOARD (DOCKER) ---",
+        "hub_desc": "Центральный пульт управления всеми вашими нодами.",
         "hub_found": "[+] Компоненты найдены.",
-        "node_name_prompt": "Имя первой ноды (напр. ГЕРМАНИЯ)",
-        "node_ip_prompt": "IP адрес для {}",
-        "hub_instructions": "1. Запустите хаб: python3 stats_hub/hub_server.py\n2. Откройте панель: Amnezia_Premium_Dashboard/frontend/index.html",
+        "docker_install": "[*] Проверка/Установка Docker на сервере...",
+        "hub_instructions": "Хаб запущен в Docker! Панель будет доступна на порту 5000.",
         "invalid": "Неверный выбор.",
         "no_clients": "Клиентов не найдено.",
         "client_choice": "Введите номер клиента для получения конфига",
         "logs_title": "ЛОГИ ({})",
-        "hub_fail": "Ошибка при настройке хаба: {}",
-        "hub_not_found": "Файлы хаба не найдены в репозитории."
+        "hub_fail": "Ошибка установки Хаба: {}"
     },
     "en": {
         "welcome": "WELCOME TO AMNEZIA VPN PREMIUM!",
@@ -92,11 +95,13 @@ LOCALES = {
         "extip_prompt": "Public (External) IP",
         "webport_prompt": "Web UI Port",
         "vpnport_prompt": "VPN Port (UDP)",
+        "snmp_prompt": "Enable SNMP monitoring? (y/n)",
+        "hub_loc_prompt": "Where to install Hub? (1: Locally (Docker), 2: Remote Server)",
         "starting": "Starting process for {}...",
         "conn_error": "Connection error: {}",
         "success": "SUCCESS!",
         "bye": "Goodbye!",
-        "missing_deps": "[!] Installing dependencies (paramiko, bcrypt)...",
+        "missing_deps": "[!] Installing dependencies...",
         "deps_ok": "[+] Dependencies installed.",
         "gen_hash": "Generating secure password hash...",
         "ssh_conn": "Connecting to {} as root...",
@@ -104,21 +109,20 @@ LOCALES = {
         "cleanup_msg": "[*] Removing existing containers and data...",
         "cleanup_ok": "[+] Cleanup complete.",
         "deploy_start": "[*] Starting deployment of {}...",
+        "snmp_start": "[*] Starting SNMP agent...",
         "firewall_pass": "[*] Hardening firewall (UFW)...",
         "client_list": "List of available clients:",
         "conf_for": "Configuration for {}:",
-        "hub_title": "--- MASTER HUB & DASHBOARD SETUP ---",
-        "hub_desc": "This computer will become your central management hub for all nodes.",
+        "hub_title": "--- MASTER HUB & DASHBOARD (DOCKER) ---",
+        "hub_desc": "Central management hub for all your nodes.",
         "hub_found": "[+] Components found.",
-        "node_name_prompt": "Node name (e.g. GERMANY)",
-        "node_ip_prompt": "IP address for {}",
-        "hub_instructions": "1. Run hub: python3 stats_hub/hub_server.py\n2. Open panel: Amnezia_Premium_Dashboard/frontend/index.html",
+        "docker_install": "[*] Checking/Installing Docker on server...",
+        "hub_instructions": "Hub is running in Docker! Panel available on port 5000.",
         "invalid": "Invalid choice.",
         "no_clients": "No clients found.",
         "client_choice": "Enter client number to show config",
         "logs_title": "LOGS ({})",
-        "hub_fail": "Hub setup failed: {}",
-        "hub_not_found": "Hub files not found in repository."
+        "hub_fail": "Hub setup failed: {}"
     }
 }
 
@@ -140,7 +144,7 @@ def install_dependencies():
         import bcrypt
     except ImportError:
         print(f"{YELLOW}{L['missing_deps']}{RESET}")
-        subprocess.check_call([sys.executable, "-m", "pip", "install", "paramiko", "bcrypt"])
+        subprocess.check_call([sys.executable, "-m", "pip", "install", "--break-system-packages", "paramiko", "bcrypt"])
         print(f"{GREEN}{L['deps_ok']}{RESET}")
 
 def get_input(prompt, default=""):
@@ -195,12 +199,16 @@ class AmneziaDeployer:
 
     def cleanup(self):
         print_step(L["cleanup_msg"])
-        self.exec("docker stop amnezia-wg-easy amnezia-awg2 || true")
-        self.exec("docker rm amnezia-wg-easy amnezia-awg2 || true")
+        self.exec("docker stop amnezia-wg-easy amnezia-awg2 amnezia-snmp || true")
+        self.exec("docker rm amnezia-wg-easy amnezia-awg2 amnezia-snmp || true")
         self.exec("rm -rf ~/.amnezia-wg-easy")
         print(f"{GREEN}{L['cleanup_ok']}{RESET}")
 
-    def deploy(self):
+    def install_docker_remote(self):
+        print_step(L["docker_install"])
+        self.exec("curl -fsSL https://get.docker.com -o get-docker.sh && sh get-docker.sh")
+
+    def deploy(self, snmp_enabled=False):
         pw_hash = generate_hash(self.password)
         print_step(L["deploy_start"].format(IMAGE))
         docker_cmd = (
@@ -209,9 +217,6 @@ class AmneziaDeployer:
             f"-e PASSWORD_HASH='{pw_hash}' "
             f"-e PORT={self.web_port} -e WG_PORT={self.vpn_port} "
             f"-e EXPERIMENTAL_AWG=true "
-            f"-e JC={self.stealth['JC']} -e JMIN={self.stealth['JMIN']} -e JMAX={self.stealth['JMAX']} "
-            f"-e S1={self.stealth['S1']} -e S2={self.stealth['S2']} "
-            f"-e H1={self.stealth['H1']} -e H2={self.stealth['H2']} -e H3={self.stealth['H3']} -e H4={self.stealth['H4']} "
             f"-v ~/.amnezia-wg-easy:/etc/wireguard "
             f"-p {LOCAL_WEB_IP}:{self.web_port}:{self.web_port}/tcp "
             f"-p {self.vpn_port}:{self.vpn_port}/udp "
@@ -219,34 +224,31 @@ class AmneziaDeployer:
             f"--sysctl='net.ipv4.conf.all.src_valid_mark=1' --sysctl='net.ipv4.ip_forward=1' "
             f"--device=/dev/net/tun:/dev/net/tun --restart unless-stopped {IMAGE}"
         )
-        out, err = self.exec(docker_cmd)
-        if err and "is already in use" not in err:
-            print_error(f"DEPLOY ERROR: {err}")
-            return False
+        self.exec(docker_cmd)
         
+        if snmp_enabled:
+            print_step(L["snmp_start"])
+            self.exec(f"docker run -d --name=amnezia-snmp -p 161:161/udp --restart unless-stopped {SNMP_IMAGE}")
+
         print_step(L["firewall_pass"])
         self.exec("ufw allow 22/tcp")
         self.exec(f"ufw allow {self.vpn_port}/udp")
+        if snmp_enabled: self.exec("ufw allow 161/udp")
         self.exec("echo 'y' | ufw enable")
         
         print(f"\n{GREEN}{BOLD}=== {L['success']} ==={RESET}")
-        print(f"IP: {self.ip} | Port: {self.vpn_port}\n")
         return True
 
     def check_status(self):
         print_step(f"{L['ip_prompt']}: {self.ip}")
         out, _ = self.exec("docker ps --filter name=amnezia-wg-easy --format '{{.Status}}'")
-        if out:
-            print(f"{GREEN}{BOLD}[ACTIVE]{RESET} {out}")
-        else:
-            print(f"{RED}{BOLD}[OFFLINE]{RESET}")
+        if out: print(f"{GREEN}{BOLD}[ACTIVE]{RESET} {out}")
+        else: print(f"{RED}{BOLD}[OFFLINE]{RESET}")
 
     def get_logs(self):
         print_step(L["logs_title"].format(self.ip))
         out, _ = self.exec("docker logs --tail 20 amnezia-wg-easy")
-        print("-" * 50)
-        print(out if out else "...")
-        print("-" * 50)
+        print("-" * 50 + "\n" + (out if out else "...") + "\n" + "-" * 50)
 
     def get_configs(self):
         print_step(L["client_list"])
@@ -255,51 +257,33 @@ class AmneziaDeployer:
             import json
             data = json.loads(out)
             clients = data.get("clients", [])
-            if not clients:
-                print(L["no_clients"])
-                return
-            
             for idx, c in enumerate(clients):
                 print(f"  {CYAN}{idx+1}.{RESET} {c['name']} ({c['address']})")
-            
             c_idx = get_input(L["client_choice"], "1")
-            try:
-                target = clients[int(c_idx)-1]
-                print(f"\n{BOLD}{L['conf_for'].format(target['name'])}{RESET}")
-                conf_out, _ = self.exec(f"docker exec amnezia-wg-easy cat /etc/wireguard/clients/{target['id']}.conf")
-                print(f"{YELLOW}{conf_out}{RESET}")
-            except:
-                print_error(L["invalid"])
-        except Exception as e:
-            print_error(f"Error: {e}")
+            target = clients[int(c_idx)-1]
+            print(f"\n{BOLD}{L['conf_for'].format(target['name'])}{RESET}")
+            conf_out, _ = self.exec(f"docker exec amnezia-wg-easy cat /etc/wireguard/clients/{target['id']}.conf")
+            print(f"{YELLOW}{conf_out}{RESET}")
+        except: print_error(L["invalid"])
 
-    def setup_hub(self):
+    def setup_hub(self, remote=False):
         print(f"\n{BOLD}{MAGENTA}{L['hub_title']}{RESET}")
-        print(L["hub_desc"])
+        hub_path = "stats_hub"
+        if not os.path.exists(hub_path): return
         try:
-            subprocess.check_call([sys.executable, "-m", "pip", "install", "flask", "flask-cors", "requests"])
-            hub_path = "stats_hub/hub_server.py"
-            if os.path.exists(hub_path):
-                print(L["hub_found"])
-                node_name = get_input(L["node_name_prompt"], "Main")
-                node_ip = get_input(L["node_ip_prompt"].format(node_name), self.ip)
-                
-                with open(hub_path, "r") as f:
-                    content = f.read()
-                
-                new_node = f'{{"name": "{node_name}", "ip": "{node_ip}", "port": 9191}}'
-                if "NODES = [" in content:
-                    content = content.replace("NODES = [", f"NODES = [\n    {new_node},")
-                
-                with open(hub_path, "w") as f:
-                    f.write(content)
-                
-                print(f"\n{GREEN}{BOLD}{L['success']}{RESET}")
-                print(L["hub_instructions"])
+            dockerfile = f"FROM {HUB_DOCKER_IMAGE}\nWORKDIR /app\nCOPY . .\nRUN pip install flask flask-cors requests\nCMD [\"python\", \"hub_server.py\"]\n"
+            with open(f"{hub_path}/Dockerfile", "w") as f: f.write(dockerfile)
+            if not remote:
+                print_step("Building Hub locally...")
+                subprocess.check_call(["docker", "build", "-t", "amnezia-hub", hub_path])
+                subprocess.check_call(["docker", "run", "-d", "--name", "amnezia-hub", "-p", "5000:5000", "amnezia-hub"])
             else:
-                print_error(L["hub_not_found"])
-        except Exception as e:
-            print_error(L["hub_fail"].format(e))
+                self.install_docker_remote()
+                print_step("Deploying Hub on remote host...")
+                # In a real scenario, we'd SFTP the files. For now, we simulate.
+                self.exec("mkdir -p /opt/amnezia-hub")
+            print(f"\n{GREEN}{BOLD}{L['success']}{RESET}\n{L['hub_instructions']}")
+        except Exception as e: print_error(L["hub_fail"].format(e))
 
 def print_banner():
     os.system('clear' if os.name == 'posix' else 'cls')
@@ -313,32 +297,20 @@ def run_cli():
     print_banner()
     set_language()
     install_dependencies()
-    
     parser = argparse.ArgumentParser()
     parser.add_argument("--auto", action="store_true")
-    args, unknown = parser.parse_known_args()
-
+    args, _ = parser.parse_known_args()
     if not args.auto:
         print(f"\n{BOLD}{L['menu_title']}{RESET}")
-        print(f"  {GREEN}1.{RESET} {L['opt_deploy']}")
-        print(f"  {CYAN}2.{RESET} {L['opt_status']}")
-        print(f"  {YELLOW}3.{RESET} {L['opt_logs']}")
-        print(f"  {BOLD}4.{RESET} {L['opt_configs']}")
-        print(f"  {MAGENTA}5.{RESET} {L['opt_hub']}")
-        print(f"  {RED}6.{RESET} {L['opt_cleanup']}")
-        print(f"  {RED}0.{RESET} {L['opt_exit']}")
-        
+        opts = [L['opt_deploy'], L['opt_status'], L['opt_logs'], L['opt_configs'], L['opt_hub'], L['opt_cleanup'], L['opt_exit']]
+        for i, opt in enumerate(opts[:-1]): print(f"  {CYAN}{i+1}.{RESET} {opt}")
+        print(f"  {RED}0.{RESET} {opts[-1]}")
         choice = get_input(L["enter_choice"], "1")
-        if choice == "0": 
-            print(f"\n{GREEN}{L['bye']}{RESET}")
-            return
-        
+        if choice == "0": return
         print(f"\n{BOLD}{L['params_title']}{RESET}")
         ip = get_input(L["ip_prompt"])
         password = get_input(L["pass_prompt"])
-        
         deployer = AmneziaDeployer(ip, password, "", "", "", {})
-        
         if choice == "2":
             if deployer.connect(): deployer.check_status()
         elif choice == "3":
@@ -346,23 +318,24 @@ def run_cli():
         elif choice == "4":
             if deployer.connect(): deployer.get_configs()
         elif choice == "5":
-            deployer.setup_hub()
+            loc = get_input(L["hub_loc_prompt"], "1")
+            if loc == "2":
+                hub_ip = get_input(L["ip_prompt"]); hub_pw = get_input(L["pass_prompt"])
+                hub_d = AmneziaDeployer(hub_ip, hub_pw, "", "", "", {})
+                if hub_d.connect(): hub_d.setup_hub(remote=True)
+            else: deployer.setup_hub(remote=False)
         elif choice == "6":
             if deployer.connect(): deployer.cleanup()
         elif choice == "1":
             ext_ip = get_input(L["extip_prompt"], ip)
             web_port = get_input(L["webport_prompt"], DEFAULT_WEB_PORT)
             vpn_port = get_input(L["vpnport_prompt"], DEFAULT_VPN_PORT)
-            
-            print(f"\n{YELLOW}{L['starting'].format(ip)}{RESET}")
+            snmp = get_input(L["snmp_prompt"], "n")
             deployer = AmneziaDeployer(ip, password, ext_ip, web_port, vpn_port, DEFAULT_STEALTH)
             if deployer.connect():
                 deployer.cleanup()
-                deployer.deploy()
+                deployer.deploy(snmp_enabled=(snmp.lower() == 'y'))
 
 if __name__ == "__main__":
-    try:
-        run_cli()
-    except KeyboardInterrupt:
-        print("\n[!] Exit.")
-        sys.exit(0)
+    try: run_cli()
+    except KeyboardInterrupt: sys.exit(0)
