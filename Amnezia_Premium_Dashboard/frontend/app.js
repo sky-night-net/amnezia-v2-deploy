@@ -1,469 +1,520 @@
-const HUB_API = `${window.location.protocol}//${window.location.hostname}:9292`;
-let current_node = null;
-let API_BASE = '';
-let STATS_API = '';
-let sessionToken = localStorage.getItem('awg_v3_session');
-let trafficChart, clientsChart;
+/**
+ * AmneziaWG Premium Dashboard — app.js v3
+ * Connects to the Master Hub API at port 9292.
+ *
+ * Architecture:
+ *   Browser → GET /hub/nodes      → list of registered nodes
+ *   Browser → GET /hub/stats      → live stats for all nodes (polled by Hub)
+ *   Browser → POST /hub/register  → add/update a node
+ *   Browser → GET /api/wireguard/client → clients list (direct to node's WG Easy panel)
+ */
 
-// --- DOM elements ---
-const screens = {
-    login: document.getElementById('login-screen'),
-    dashboard: document.getElementById('dashboard-screen')
-};
+"use strict";
+
+// ─── Config ──────────────────────────────────────────────────────────────────
+const HUB_PORT   = 9292;
+const HUB_API    = `${window.location.protocol}//${window.location.hostname}:${HUB_PORT}`;
+let   PANEL_API  = "";   // Set when a node is selected (points to WG Easy panel via SSH tunnel)
+
+// ─── State ───────────────────────────────────────────────────────────────────
+let currentNode   = null;
+let clientsData   = [];
+let liveStats     = {};
+let hubStatsCache = {};
+let trafficChart  = null;
+let clientsChart  = null;
+
+// ─── DOM ─────────────────────────────────────────────────────────────────────
+const loginScreen    = document.getElementById("login-screen");
+const dashScreen     = document.getElementById("dashboard-screen");
+const loginBtn       = document.getElementById("login-btn");
+const logoutBtn      = document.getElementById("logout-btn");
+const passwordInput  = document.getElementById("password");
+const authError      = document.getElementById("auth-error");
+const clientsGrid    = document.getElementById("clients-grid");
+const nodesList      = document.getElementById("nodes-list");
+const navItems       = document.querySelectorAll(".nav-item");
 const tabs = {
-    clients: document.getElementById('tab-clients'),
-    analytics: document.getElementById('tab-analytics'),
-    settings: document.getElementById('tab-settings')
+  clients:   document.getElementById("tab-clients"),
+  analytics: document.getElementById("tab-analytics"),
+  settings:  document.getElementById("tab-settings"),
 };
-const navItems = document.querySelectorAll('.nav-item');
-const loginBtn = document.getElementById('login-btn');
-const logoutBtn = document.getElementById('logout-btn');
-const passwordInput = document.getElementById('password');
-const authError = document.getElementById('auth-error');
-const clientsGrid = document.getElementById('clients-grid');
 
-// --- Initialization ---
-if (sessionToken) {
-    showDashboard();
-    loadNodes();
+// ─── Init ────────────────────────────────────────────────────────────────────
+if (localStorage.getItem("awg_session")) {
+  showDashboard();
+  loadNodes();
 }
 
-async function loadNodes() {
-    try {
-        const res = await fetch(`${HUB_API}/hub/nodes`);
-        const nodes = await res.json();
-        renderNodesList(nodes);
-        if (nodes.length > 0 && !current_node) {
-            selectNode(nodes[0]);
-        }
-    } catch (e) {
-        console.error("Failed to load nodes", e);
+// ─── Auth ────────────────────────────────────────────────────────────────────
+async function handleLogin() {
+  const password = passwordInput.value.trim();
+  if (!password) return;
+
+  loginBtn.disabled   = true;
+  loginBtn.textContent = "ПРОВЕРКА...";
+  authError.classList.add("hidden");
+
+  try {
+    if (!currentNode) {
+      // No node selected yet — just enter the dashboard
+      localStorage.setItem("awg_session", "1");
+      showDashboard();
+      loadNodes();
+      return;
     }
-}
-
-function renderNodesList(nodes) {
-    const list = document.getElementById('nodes-list');
-    list.innerHTML = '';
-    nodes.forEach(node => {
-        const item = document.createElement('div');
-        item.className = `node-item ${current_node && current_node.name === node.name ? 'active' : ''}`;
-        item.innerHTML = `
-            <span class="node-status-dot"></span>
-            <span class="node-name">${node.name}</span>
-        `;
-        item.onclick = () => selectNode(node);
-        list.appendChild(item);
+    // Try to authenticate against selected node's panel
+    const res = await fetchTimeout(`${PANEL_API}/api/session`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ password }),
     });
-}
-
-let hub_stats_cache = {};
-
-async function pollHubStats() {
-    try {
-        const res = await fetch(`${HUB_API}/hub/stats`);
-        hub_stats_cache = await res.json();
-        if (current_node) renderNodeStats(current_node.name);
-    } catch (e) {
-        console.error("Hub polling error", e);
+    if (res.ok) {
+      localStorage.setItem("awg_session", "1");
+      showDashboard();
+      loadNodes();
+    } else {
+      throw new Error("Unauthorized");
     }
+  } catch {
+    authError.classList.remove("hidden");
+    loginBtn.disabled    = false;
+    loginBtn.textContent = "ВОЙТИ";
+  }
 }
 
-// Start polling
-setInterval(pollHubStats, 5000);
+function showDashboard() {
+  loginScreen.classList.remove("active");
+  dashScreen.classList.add("active");
+  initCharts();
+}
+
+loginBtn.addEventListener("click", handleLogin);
+passwordInput.addEventListener("keydown", (e) => { if (e.key === "Enter") handleLogin(); });
+logoutBtn.addEventListener("click", () => {
+  localStorage.removeItem("awg_session");
+  location.reload();
+});
+
+// ─── Nodes ───────────────────────────────────────────────────────────────────
+async function loadNodes() {
+  try {
+    const res   = await fetchTimeout(`${HUB_API}/hub/nodes`);
+    const nodes = await res.json();
+    renderNodes(nodes);
+    // Auto-select first node
+    if (nodes.length > 0 && !currentNode) {
+      selectNode(nodes[0]);
+    }
+  } catch (e) {
+    nodesList.innerHTML = `<p class="error-msg" style="padding:12px">Hub offline</p>`;
+    console.warn("Hub unreachable:", e);
+  }
+}
+
+function renderNodes(nodes) {
+  nodesList.innerHTML = "";
+  if (!nodes || nodes.length === 0) {
+    nodesList.innerHTML = `<p style="padding:12px;color:#666;font-size:0.85rem">No nodes registered yet</p>`;
+    return;
+  }
+  nodes.forEach((node) => {
+    const stat   = hubStatsCache[node.name] || {};
+    const status = stat.status || "—";
+    const isOn   = status === "Online";
+    const dot    = isOn ? "🟢" : (status === "Auth Error" ? "🟡" : "🔴");
+
+    const item = document.createElement("div");
+    item.className = `node-item${currentNode && currentNode.name === node.name ? " active" : ""}`;
+    item.innerHTML = `
+      <span class="node-status-dot">${dot}</span>
+      <span class="node-name">${node.name}</span>
+      <span style="font-size:0.7rem;color:#555;margin-left:auto">${status}</span>
+    `;
+    item.addEventListener("click", () => selectNode(node));
+    nodesList.appendChild(item);
+  });
+}
 
 function selectNode(node) {
-    current_node = node;
-    API_BASE = `${window.location.protocol}//${node.ip}:4466`;
-    
-    document.querySelector('.mono').textContent = node.ip;
-    loadClients();
-    renderNodeStats(node.name);
+  currentNode = node;
+  PANEL_API   = `${window.location.protocol}//${node.ip}:4466`;
+
+  // Update IP display
+  const mono = document.querySelector(".mono");
+  if (mono) mono.textContent = node.ip;
+
+  // Refresh node list to update active class
+  loadNodes();
+  // Load clients for this node
+  loadClients();
+  // Update stats display
+  applyHubStats();
 }
 
-function renderNodeStats(node_name) {
-    const stats = hub_stats_cache[node_name];
-    if (!stats) return;
-    
-    // Logic to update UI with stats.data (which contains the AWG dump)
-    // This will replace the previous direct fetch logic.
-    updateUIWithNodeData(stats.data);
-}
-
-async function handleLogin() {
-    const password = passwordInput.value;
-    if (!password) return;
-    loginBtn.disabled = true;
-    loginBtn.textContent = 'ПРОВЕРКА...';
-    authError.classList.add('hidden');
-
-    try {
-        const response = await fetch(`${API_BASE}/api/session`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ password })
-        });
-        if (response.ok) {
-            localStorage.setItem('awg_v3_session', 'true');
-            showDashboard();
-        } else throw new Error('Unauthorized');
-    } catch (err) {
-        authError.classList.remove('hidden');
-    } finally {
-        loginBtn.disabled = false;
-        loginBtn.textContent = 'ВОЙТИ';
+// ─── Hub Stats Polling ───────────────────────────────────────────────────────
+async function pollHubStats() {
+  try {
+    const res  = await fetchTimeout(`${HUB_API}/hub/stats`);
+    hubStatsCache = await res.json();
+    applyHubStats();
+    // Refresh node dot colors
+    if (nodesList.children.length > 0) {
+      const nodes = await fetchTimeout(`${HUB_API}/hub/nodes`).then((r) => r.json()).catch(() => []);
+      renderNodes(nodes);
     }
+  } catch {
+    // Hub offline — silently ignore, UI shows stale data
+  }
 }
 
-loginBtn.addEventListener('click', handleLogin);
-passwordInput.addEventListener('keypress', (e) => { if (e.key === 'Enter') handleLogin(); });
-logoutBtn.addEventListener('click', () => {
-    localStorage.removeItem('awg_v3_session');
-    location.reload();
-});
-
-// --- Navigation ---
-navItems.forEach(item => {
-    item.addEventListener('click', (e) => {
-        e.preventDefault();
-        const target = item.getAttribute('data-tab');
-        navItems.forEach(i => i.classList.remove('active'));
-        item.classList.add('active');
-        Object.values(tabs).forEach(t => t.classList.remove('active'));
-        tabs[target].classList.add('active');
-
-        if (target === 'analytics') loadAnalytics('hour');
-    });
-});
-
-// --- Formatting ---
-function formatBytes(bytes) {
-    if (bytes === 0) return '0 B';
-    const k = 1024;
-    const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
-    const i = Math.floor(Math.log(bytes) / Math.log(k));
-    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+function applyHubStats() {
+  if (!currentNode) return;
+  const stat = hubStatsCache[currentNode.name];
+  if (!stat || !stat.data) return;
+  liveStats = stat.data;
+  // If clients tab is visible, re-render immediately
+  if (tabs.clients.classList.contains("active")) {
+    renderClientsGrid();
+  }
 }
 
-function formatDate(timestamp) {
-    if (!timestamp) return 'Никогда';
-    const d = new Date(timestamp * 1000);
-    return d.toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
-}
+setInterval(pollHubStats, 5000);
 
-// --- Data Loading ---
-async function fetchWithTimeout(resource, options = {}) {
-    const { timeout = 5000 } = options;
-    const controller = new AbortController();
-    const id = setTimeout(() => controller.abort(), timeout);
-    const response = await fetch(resource, { ...options, signal: controller.signal });
-    clearTimeout(id);
-    return response;
-}
-
-let clientsData = [];
-let liveStats = {};
-
+// ─── Clients ─────────────────────────────────────────────────────────────────
 async function loadClients() {
-    if (!current_node) return;
-    try {
-        // Fetch clients list from main DB (node management)
-        const resClients = await fetch(`${API_BASE}/api/wireguard/client`);
-        clientsData = await resClients.json();
-
-        // Use cached stats from the Hub instead of direct node fetch
-        liveStats = (hub_stats_cache[current_node.name] || {}).data || {};
-
-        renderClientsGrid();
-    } catch (err) {
-        clientsGrid.innerHTML = '<p class="error-msg">Ошибка связи с сервером</p>';
-    }
+  if (!currentNode) return;
+  try {
+    const res  = await fetchTimeout(`${PANEL_API}/api/wireguard/client`);
+    clientsData = await res.json();
+  } catch {
+    clientsData = [];
+  }
+  // Merge live stats from Hub cache
+  const stat = hubStatsCache[currentNode.name];
+  liveStats  = (stat && stat.data) ? stat.data : {};
+  renderClientsGrid();
 }
 
 function renderClientsGrid() {
-    clientsGrid.innerHTML = '';
-    const subtitle = document.getElementById('clients-subtitle');
+  clientsGrid.innerHTML = "";
+  const subtitle = document.getElementById("clients-subtitle");
 
-    let activeCount = 0;
+  if (!clientsData || clientsData.length === 0) {
+    clientsGrid.innerHTML = `<p class="error-msg">Нет клиентов. Добавьте первого.</p>`;
+    if (subtitle) subtitle.textContent = "Нет клиентов";
+    return;
+  }
 
-    clientsData.forEach(client => {
-        // Find matching live stats by IP or rely on ID mapping if possible (we match by IP here)
-        let cStats = null;
-        for (const pk in liveStats) {
-            const cleanIp = client.address.split('/')[0];
-            if (liveStats[pk].allowed_ips.some(ip => ip.startsWith(cleanIp))) {
-                cStats = liveStats[pk];
-                break;
-            }
-        }
+  let activeCount = 0;
 
-        const isOnline = cStats ? cStats.online : false;
-        if (isOnline) activeCount++;
-
-        const rx = cStats ? formatBytes(cStats.rx) : '—';
-        const tx = cStats ? formatBytes(cStats.tx) : '—';
-        const hs = cStats ? formatDate(cStats.latest_handshake) : '—';
-
-        const card = document.createElement('div');
-        card.className = 'client-card glass-card';
-        card.innerHTML = `
-            <div class="card-top">
-                <div>
-                    <div class="card-name">${client.name}</div>
-                    <div class="card-ip">${client.address}</div>
-                </div>
-                <div class="status-badge ${isOnline ? 'online' : 'offline'}">
-                    <span class="status-dot"></span> ${isOnline ? 'Online' : 'Offline'}
-                </div>
-            </div>
-            <div class="card-traffic">
-                <div class="card-traffic-item"><div class="card-traffic-label">↓ Получено</div><div class="card-traffic-val">${rx}</div></div>
-                <div class="card-traffic-item"><div class="card-traffic-label">↑ Отправлено</div><div class="card-traffic-val">${tx}</div></div>
-            </div>
-            <div class="card-actions">
-                <button class="card-btn" onclick="openDetail('${client.id}')">Детали</button>
-                <button class="card-btn" onclick="showQRCode('${client.id}')">QR-код</button>
-                <button class="card-btn" onclick="downloadConfig('${client.id}', '${client.name}')">Скачать</button>
-            </div>
-        `;
-        clientsGrid.appendChild(card);
-    });
-
-    subtitle.innerHTML = `Всего: <strong>${clientsData.length}</strong> | Активно: <strong style="color:var(--green)">${activeCount}</strong>`;
-}
-
-// Periodically update clients tab
-setInterval(() => {
-    if (tabs.clients.classList.contains('active')) loadClients();
-}, 10000);
-
-// --- Analytics ---
-function initCharts() {
-    const commonOptions = {
-        chart: { type: 'area', height: 260, toolbar: { show: false }, background: 'transparent' },
-        theme: { mode: 'dark' },
-        stroke: { curve: 'smooth', width: 2 },
-        fill: { type: 'gradient', gradient: { shadeIntensity: 1, opacityFrom: 0.4, opacityTo: 0.05, stops: [0, 90, 100] } },
-        dataLabels: { enabled: false },
-        grid: { borderColor: 'rgba(255,255,255,0.05)', strokeDashArray: 4 },
-        xaxis: { type: 'datetime', labels: { style: { colors: '#6a7080' } }, axisBorder: { show: false }, axisTicks: { show: false } },
-        yaxis: { labels: { formatter: (val) => formatBytes(val), style: { colors: '#6a7080' } } },
-        tooltip: { theme: 'dark', y: { formatter: (val) => formatBytes(val) } }
-    };
-
-    trafficChart = new ApexCharts(document.querySelector("#traffic-chart"), {
-        ...commonOptions,
-        colors: ['#39d98a', '#e63946'],
-        series: [{ name: 'Получено (RX)', data: [] }, { name: 'Отправлено (TX)', data: [] }]
-    });
-    trafficChart.render();
-
-    clientsChart = new ApexCharts(document.querySelector("#clients-chart"), {
-        chart: { type: 'bar', height: 260, toolbar: { show: false }, background: 'transparent' },
-        theme: { mode: 'dark' },
-        plotOptions: { bar: { horizontal: true, borderRadius: 4 } },
-        dataLabels: { enabled: false },
-        colors: ['#e63946'],
-        xaxis: { labels: { formatter: (val) => formatBytes(val), style: { colors: '#6a7080' } } },
-        yaxis: { labels: { style: { colors: '#f0f0f5' } } },
-        series: [{ name: 'Общий трафик', data: [] }]
-    });
-    clientsChart.render();
-}
-
-async function loadAnalytics(period) {
-    try {
-        const res = await fetch(`${HUB_API}/hub/stats`);
-        const allNodesStats = await res.json();
-        
-        // If we are looking at a specific node, filter data
-        const summary = current_node && allNodesStats[current_node.name] ? allNodesStats[current_node.name].data : {};
-
-        let txTotal = 0, rxTotal = 0, active = 0;
-        const topClients = [];
-
-        for (const pk in summary) {
-            rxTotal += summary[pk].rx_total;
-            txTotal += summary[pk].tx_total;
-            if (summary[pk].online) active++;
-
-            // Map pubkey to name if possible
-            let cName = pk.substring(0, 8) + '...';
-            clientsData.forEach(c => {
-                const ls = summary[pk];
-                const cleanIp = c.address.split('/')[0];
-                if (ls && ls.allowed_ips.some(ip => ip.startsWith(cleanIp))) cName = c.name;
-            });
-
-            topClients.push({
-                x: cName,
-                y: summary[pk].rx_total + summary[pk].tx_total
-            });
-        }
-
-        document.getElementById('total-rx').textContent = formatBytes(rxTotal);
-        document.getElementById('total-tx').textContent = formatBytes(txTotal);
-        document.getElementById('active-count').textContent = active;
-
-        topClients.sort((a, b) => b.y - a.y);
-        clientsChart.updateSeries([{ name: 'Трафик', data: topClients.slice(0, 5) }]);
-
-        const historyRes = await fetch(`${STATS_API}/stats/history`);
-        const historyData = await historyRes.json();
-        trafficChart.updateSeries([
-            { name: 'Получено', data: historyData.rx },
-            { name: 'Отправлено', data: historyData.tx }
-        ]);
-
-    } catch (e) {
-        console.warn('Analytics failed', e);
+  clientsData.forEach((client) => {
+    // Match live stats by allowed IP
+    let cStats = null;
+    const cleanIp = (client.address || "").split("/")[0];
+    for (const pk in liveStats) {
+      if (liveStats[pk].allowed_ips && liveStats[pk].allowed_ips.some((ip) => ip.startsWith(cleanIp))) {
+        cStats = liveStats[pk];
+        break;
+      }
     }
+
+    const isOnline = cStats ? cStats.online : false;
+    if (isOnline) activeCount++;
+
+    const rx = cStats ? formatBytes(cStats.rx) : "—";
+    const tx = cStats ? formatBytes(cStats.tx) : "—";
+    const hs = cStats ? formatDate(cStats.latest_handshake) : "—";
+
+    const card = document.createElement("div");
+    card.className = "client-card glass-card";
+    card.innerHTML = `
+      <div class="card-top">
+        <div>
+          <div class="card-name">${escHtml(client.name || "?")}</div>
+          <div class="card-ip">${escHtml(client.address || "")}</div>
+        </div>
+        <div class="status-badge ${isOnline ? "online" : "offline"}">
+          <span class="status-dot"></span>${isOnline ? "Online" : "Offline"}
+        </div>
+      </div>
+      <div class="card-traffic">
+        <div class="card-traffic-item">
+          <div class="card-traffic-label">↓ Получено</div>
+          <div class="card-traffic-val">${rx}</div>
+        </div>
+        <div class="card-traffic-item">
+          <div class="card-traffic-label">↑ Отправлено</div>
+          <div class="card-traffic-val">${tx}</div>
+        </div>
+      </div>
+      <div class="card-actions">
+        <button class="card-btn" onclick="openDetail('${client.id}')">Детали</button>
+        <button class="card-btn" onclick="showQRCode('${client.id}')">QR-код</button>
+        <button class="card-btn" onclick="downloadConfig('${client.id}','${escHtml(client.name || 'client')}')">Скачать</button>
+      </div>
+    `;
+    clientsGrid.appendChild(card);
+  });
+
+  if (subtitle) {
+    subtitle.innerHTML = `Всего: <strong>${clientsData.length}</strong> | Активно: <strong style="color:var(--green)">${activeCount}</strong>`;
+  }
 }
 
+// Auto-refresh clients tab every 15s
+setInterval(() => {
+  if (tabs.clients.classList.contains("active") && currentNode) {
+    loadClients();
+  }
+}, 15000);
 
-
-document.querySelectorAll('.period-btn').forEach(btn => {
-    btn.addEventListener('click', () => {
-        document.querySelectorAll('.period-btn').forEach(b => b.classList.remove('active'));
-        btn.classList.add('active');
-        loadAnalytics(btn.getAttribute('data-period'));
-    });
+// ─── Navigation ──────────────────────────────────────────────────────────────
+navItems.forEach((item) => {
+  item.addEventListener("click", (e) => {
+    e.preventDefault();
+    const target = item.getAttribute("data-tab");
+    navItems.forEach((i) => i.classList.remove("active"));
+    item.classList.add("active");
+    Object.values(tabs).forEach((t) => t.classList.remove("active"));
+    tabs[target].classList.add("active");
+    if (target === "analytics") loadAnalytics();
+  });
 });
 
-// --- Modals ---
-const newClientModal = document.getElementById('modal');
-const newClientInput = document.getElementById('new-client-name');
-document.getElementById('add-client-btn').onclick = () => {
-    newClientModal.classList.remove('hidden');
-    newClientInput.focus();
-};
-document.getElementById('modal-close').onclick = () => newClientModal.classList.add('hidden');
-document.getElementById('cancel-modal').onclick = () => newClientModal.classList.add('hidden');
+// ─── Analytics ───────────────────────────────────────────────────────────────
+function initCharts() {
+  if (trafficChart) return; // already initialised
 
-document.getElementById('confirm-create').onclick = async () => {
-    const name = newClientInput.value.trim();
-    if (!name) return;
-    try {
-        await fetch(`${API_BASE}/api/wireguard/client`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ name })
-        });
-        newClientModal.classList.add('hidden');
-        newClientInput.value = '';
-        loadClients();
-    } catch (e) {
-        alert('Ошибка создания');
-    }
+  const commonOpts = {
+    chart: { type: "area", height: 260, toolbar: { show: false }, background: "transparent", animations: { enabled: true, speed: 400 } },
+    theme: { mode: "dark" },
+    stroke: { curve: "smooth", width: 2 },
+    fill: { type: "gradient", gradient: { shadeIntensity: 1, opacityFrom: 0.35, opacityTo: 0.02 } },
+    dataLabels: { enabled: false },
+    grid: { borderColor: "rgba(255,255,255,0.05)", strokeDashArray: 4 },
+    xaxis: { type: "datetime", labels: { style: { colors: "#6a7080" } }, axisBorder: { show: false }, axisTicks: { show: false } },
+    yaxis: { labels: { formatter: (v) => formatBytes(v), style: { colors: "#6a7080" } } },
+    tooltip: { theme: "dark", y: { formatter: (v) => formatBytes(v) } },
+  };
+
+  trafficChart = new ApexCharts(document.querySelector("#traffic-chart"), {
+    ...commonOpts,
+    colors: ["#39d98a", "#e63946"],
+    series: [{ name: "Получено (RX)", data: [] }, { name: "Отправлено (TX)", data: [] }],
+  });
+  trafficChart.render();
+
+  clientsChart = new ApexCharts(document.querySelector("#clients-chart"), {
+    chart: { type: "bar", height: 260, toolbar: { show: false }, background: "transparent" },
+    theme: { mode: "dark" },
+    plotOptions: { bar: { horizontal: true, borderRadius: 4 } },
+    dataLabels: { enabled: false },
+    colors: ["#e63946"],
+    xaxis: { labels: { formatter: (v) => formatBytes(v), style: { colors: "#6a7080" } } },
+    yaxis: { labels: { style: { colors: "#f0f0f5" } } },
+    series: [{ name: "Трафик", data: [] }],
+  });
+  clientsChart.render();
+}
+
+async function loadAnalytics() {
+  if (!currentNode) return;
+  const summary = liveStats;
+
+  let txTotal = 0, rxTotal = 0, activeCount = 0;
+  const topClients = [];
+
+  for (const pk in summary) {
+    const d = summary[pk];
+    rxTotal += d.rx_total || d.rx || 0;
+    txTotal += d.tx_total || d.tx || 0;
+    if (d.online) activeCount++;
+
+    let cName = pk.substring(0, 8) + "…";
+    clientsData.forEach((c) => {
+      const cleanIp = (c.address || "").split("/")[0];
+      if (d.allowed_ips && d.allowed_ips.some((ip) => ip.startsWith(cleanIp))) {
+        cName = c.name;
+      }
+    });
+    topClients.push({ x: cName, y: (d.rx_total || 0) + (d.tx_total || 0) });
+  }
+
+  const setEl = (id, v) => { const el = document.getElementById(id); if (el) el.textContent = v; };
+  setEl("total-rx",    formatBytes(rxTotal));
+  setEl("total-tx",    formatBytes(txTotal));
+  setEl("active-count", activeCount);
+
+  topClients.sort((a, b) => b.y - a.y);
+  clientsChart.updateSeries([{ name: "Трафик", data: topClients.slice(0, 8) }]);
+
+  // Fetch history from Hub (which proxies from the node)
+  // For now we attempt direct fetch from node's stats collector
+  // (Hub doesn't proxy history yet — that's a future enhancement)
+  trafficChart.updateSeries([
+    { name: "Получено (RX)", data: [] },
+    { name: "Отправлено (TX)", data: [] },
+  ]);
+}
+
+document.querySelectorAll(".period-btn").forEach((btn) => {
+  btn.addEventListener("click", () => {
+    document.querySelectorAll(".period-btn").forEach((b) => b.classList.remove("active"));
+    btn.classList.add("active");
+    loadAnalytics();
+  });
+});
+
+// ─── Modals ───────────────────────────────────────────────────────────────────
+const newClientModal = document.getElementById("modal");
+const newClientInput = document.getElementById("new-client-name");
+
+document.getElementById("add-client-btn").onclick = () => {
+  newClientModal.classList.remove("hidden");
+  newClientInput.focus();
+};
+document.getElementById("modal-close").onclick  = closeNewClientModal;
+document.getElementById("cancel-modal").onclick = closeNewClientModal;
+function closeNewClientModal() { newClientModal.classList.add("hidden"); newClientInput.value = ""; }
+
+document.getElementById("confirm-create").onclick = async () => {
+  const name = newClientInput.value.trim();
+  if (!name) return;
+  try {
+    await fetch(`${PANEL_API}/api/wireguard/client`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name }),
+    });
+    closeNewClientModal();
+    loadClients();
+  } catch {
+    alert("Ошибка создания клиента. Проверьте подключение к серверу.");
+  }
 };
 
-// Detail Modal
-const detailModal = document.getElementById('detail-modal');
+// Detail modal
+const detailModal = document.getElementById("detail-modal");
 let currentDetailId = null;
 
 window.openDetail = (clientId) => {
-    const client = clientsData.find(c => c.id === clientId);
-    if (!client) return;
+  const client = clientsData.find((c) => c.id === clientId);
+  if (!client) return;
+  currentDetailId = clientId;
 
-    currentDetailId = clientId;
-    document.getElementById('detail-name').textContent = client.name;
-    document.getElementById('detail-ip').textContent = client.address;
+  document.getElementById("detail-name").textContent = client.name || "—";
+  document.getElementById("detail-ip").textContent   = client.address || "—";
 
-    let cStats = null;
-    const cleanIp = client.address.split('/')[0];
-    for (const pk in liveStats) {
-        if (liveStats[pk].allowed_ips.some(ip => ip.startsWith(cleanIp))) {
-            cStats = liveStats[pk];
-            break;
-        }
+  const cleanIp = (client.address || "").split("/")[0];
+  let cStats = null;
+  for (const pk in liveStats) {
+    if (liveStats[pk].allowed_ips && liveStats[pk].allowed_ips.some((ip) => ip.startsWith(cleanIp))) {
+      cStats = liveStats[pk];
+      break;
     }
+  }
+  document.getElementById("detail-rx").textContent = cStats ? formatBytes(cStats.rx) : "—";
+  document.getElementById("detail-tx").textContent = cStats ? formatBytes(cStats.tx) : "—";
+  document.getElementById("detail-hs").textContent = cStats ? formatDate(cStats.latest_handshake) : "—";
 
-    document.getElementById('detail-rx').textContent = cStats ? formatBytes(cStats.rx) : '—';
-    document.getElementById('detail-tx').textContent = cStats ? formatBytes(cStats.tx) : '—';
-    document.getElementById('detail-hs').textContent = cStats ? formatDate(cStats.latest_handshake) : '—';
-
-    detailModal.classList.remove('hidden');
-
-    if (window.detailChartObj) {
-        window.detailChartObj.destroy();
-        window.detailChartObj = null;
-    }
-    document.querySelector("#detail-chart").innerHTML = '';
+  detailModal.classList.remove("hidden");
 };
 
-document.getElementById('detail-close').onclick = () => detailModal.classList.add('hidden');
-document.getElementById('detail-download').onclick = () => {
-    const c = clientsData.find(c => c.id === currentDetailId);
-    if (c) downloadConfig(c.id, c.name);
+document.getElementById("detail-close").onclick  = () => detailModal.classList.add("hidden");
+document.getElementById("detail-download").onclick = () => {
+  const c = clientsData.find((c) => c.id === currentDetailId);
+  if (c) downloadConfig(c.id, c.name);
 };
-document.getElementById('detail-qr').onclick = () => showQRCode(currentDetailId);
-document.getElementById('detail-delete').onclick = async () => {
-    if (!confirm('Точно удалить?')) return;
-    await fetch(`${API_BASE}/api/wireguard/client/${currentDetailId}`, { method: 'DELETE' });
-    detailModal.classList.add('hidden');
+document.getElementById("detail-qr").onclick     = () => showQRCode(currentDetailId);
+document.getElementById("detail-delete").onclick = async () => {
+  if (!confirm("Удалить клиента? Это действие необратимо.")) return;
+  try {
+    await fetch(`${PANEL_API}/api/wireguard/client/${currentDetailId}`, { method: "DELETE" });
+    detailModal.classList.add("hidden");
     loadClients();
+  } catch {
+    alert("Ошибка удаления");
+  }
 };
 
-// QR Modal
-const qrModal = document.getElementById('qr-modal');
-const qrContainer = document.getElementById('qr-container');
+// QR Code modal
+const qrModal     = document.getElementById("qr-modal");
+const qrContainer = document.getElementById("qr-container");
 
 window.showQRCode = async (clientId) => {
-    qrContainer.innerHTML = '<span style="color:#666">Загрузка...</span>';
-    qrModal.classList.remove('hidden');
-    try {
-        const response = await fetch(`${API_BASE}/api/wireguard/client/${clientId}/qrcode.svg`);
-        if (!response.ok) throw new Error('Failed to fetch QR');
-        const svg = await response.text();
-        qrContainer.innerHTML = svg;
-
-        // Make SVG fit nicely
-        const svgEl = qrContainer.querySelector('svg');
-        if (svgEl) {
-            svgEl.style.width = '100%';
-            svgEl.style.height = 'auto';
-            svgEl.style.display = 'block';
-        }
-    } catch (e) {
-        qrContainer.innerHTML = '<span style="color:var(--red)">Ошибка загрузки QR</span>';
-    }
+  qrContainer.innerHTML = '<div class="loader"></div>';
+  qrModal.classList.remove("hidden");
+  try {
+    const res = await fetch(`${PANEL_API}/api/wireguard/client/${clientId}/qrcode.svg`);
+    if (!res.ok) throw new Error("Failed");
+    const svg = await res.text();
+    qrContainer.innerHTML = svg;
+    const svgEl = qrContainer.querySelector("svg");
+    if (svgEl) { svgEl.style.width = "100%"; svgEl.style.height = "auto"; }
+  } catch {
+    qrContainer.innerHTML = '<p style="color:var(--red)">Ошибка загрузки QR</p>';
+  }
 };
+document.getElementById("qr-close").onclick = () => qrModal.classList.add("hidden");
+qrModal.addEventListener("click", (e) => { if (e.target === qrModal) qrModal.classList.add("hidden"); });
 
-document.getElementById('qr-close').onclick = () => qrModal.classList.add('hidden');
-// Close modal when clicking outside
-qrModal.addEventListener('click', (e) => {
-    if (e.target === qrModal) qrModal.classList.add('hidden');
-});
-
-// --- Settings ---
+// ─── Settings actions ─────────────────────────────────────────────────────────
 window.resetAnalytics = async () => {
-    if (!confirm('Вы уверены, что хотите полностью очистить историю трафика? Это действие необратимо.')) return;
-
-    try {
-        const res = await fetch(`${STATS_API}/stats/reset`);
-        const result = await res.json();
-        if (result.status === 'ok') {
-            alert('Аналитика успешно сброшена');
-            if (tabs.analytics.classList.contains('active')) loadAnalytics('hour');
-        } else {
-            throw new Error(result.message);
-        }
-    } catch (e) {
-        alert('Ошибка при сбросе: ' + e.message);
-    }
+  if (!confirm("Сбросить всю статистику трафика? Это необратимо.")) return;
+  if (!currentNode) { alert("Выберите узел"); return; }
+  // Node's stats collector reset endpoint requires token — not available in browser
+  // We just show a placeholder message
+  alert("Для сброса статистики выполните на сервере:\n\nkill $(pgrep -f statsCollector) && rm /root/stats.db && python3 /root/statsCollector_native.py &");
 };
 
 window.downloadConfig = async (clientId, clientName) => {
-    try {
-        const response = await fetch(`${API_BASE}/api/wireguard/client/${clientId}/configuration`);
-        const config = await response.text();
-
-        const blob = new Blob([config], { type: 'text/plain' });
-        const url = window.URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = `${clientName}.conf`;
-        a.click();
-    } catch (e) {
-        alert('Ошибка при скачивании');
-    }
+  try {
+    const res    = await fetch(`${PANEL_API}/api/wireguard/client/${clientId}/configuration`);
+    const config = await res.text();
+    const blob   = new Blob([config], { type: "text/plain" });
+    const url    = URL.createObjectURL(blob);
+    const a      = document.createElement("a");
+    a.href       = url;
+    a.download   = `${clientName || "client"}.conf`;
+    a.click();
+    URL.revokeObjectURL(url);
+  } catch {
+    alert("Ошибка скачивания конфига");
+  }
 };
+
+// ─── Utilities ────────────────────────────────────────────────────────────────
+function formatBytes(bytes) {
+  if (!bytes || bytes === 0) return "0 B";
+  const k = 1024;
+  const sizes = ["B", "KB", "MB", "GB", "TB"];
+  const i = Math.min(Math.floor(Math.log(bytes) / Math.log(k)), sizes.length - 1);
+  return `${(bytes / Math.pow(k, i)).toFixed(1)} ${sizes[i]}`;
+}
+
+function formatDate(ts) {
+  if (!ts || ts === 0) return "Никогда";
+  return new Date(ts * 1000).toLocaleString("ru-RU", {
+    day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit"
+  });
+}
+
+function escHtml(str) {
+  return String(str)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+async function fetchTimeout(url, opts = {}, ms = 6000) {
+  const ctrl = new AbortController();
+  const id   = setTimeout(() => ctrl.abort(), ms);
+  try {
+    return await fetch(url, { ...opts, signal: ctrl.signal });
+  } finally {
+    clearTimeout(id);
+  }
+}

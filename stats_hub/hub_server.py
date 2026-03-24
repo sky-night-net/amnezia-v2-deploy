@@ -1,104 +1,205 @@
-import requests
+#!/usr/bin/env python3
+"""
+Amnezia Master Hub v3 — Central monitoring server for all VPN nodes.
+
+Runs inside Docker, listens on port 9292.
+Nodes register themselves via POST /hub/register after deployment.
+"""
+
 import json
+import os
 import time
 import threading
-import os
-from flask import Flask, jsonify, request
+import logging
+
+from flask import Flask, jsonify, request, Response
 from flask_cors import CORS
 
+try:
+    import requests as req_lib
+    REQUESTS_AVAILABLE = True
+except ImportError:
+    REQUESTS_AVAILABLE = False
+
+# ─── Setup ───────────────────────────────────────────────────────────────────
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    datefmt="%H:%M:%S"
+)
+log = logging.getLogger("hub")
+
 app = Flask(__name__)
-CORS(app)
+CORS(app, resources={r"/*": {"origins": "*"}})
 
-# --- CONFIGURATION ---
-PORT = 9292
-HUB_CONFIG = "hub_config.json"
+PORT        = int(os.getenv("HUB_PORT", "9292"))
+CONFIG_FILE = os.getenv("HUB_CONFIG", "hub_config.json")
+POLL_SEC    = int(os.getenv("POLL_INTERVAL", "15"))
 
-# Global state
-node_stats = {}
+# In-memory state
+node_stats: dict = {}
+_lock = threading.Lock()
 
-def get_nodes():
-    if os.path.exists(HUB_CONFIG):
-        with open(HUB_CONFIG, "r") as f:
-            return json.load(f)
+# ─── Config helpers ──────────────────────────────────────────────────────────
+
+def load_nodes() -> list:
+    if os.path.exists(CONFIG_FILE):
+        try:
+            with open(CONFIG_FILE, "r") as f:
+                return json.load(f)
+        except (json.JSONDecodeError, IOError):
+            pass
     return []
 
-def save_nodes(nodes):
-    with open(HUB_CONFIG, "w") as f:
-        json.dump(nodes, f, indent=4)
 
-def poll_nodes():
-    """Background thread to poll node status via HTTP or SNMP."""
-    while True:
-        nodes = get_nodes()
-        for node in nodes:
-            node_name = node['name']
-            node_ip = node['ip']
-            token = node.get('token', 'default_secret_123')
-            
-            try:
-                # 1. Try Native HTTP Polling (9191) with Auth Token
-                try:
-                    headers = {"X-Auth-Token": token}
-                    r = requests.get(f"http://{node_ip}:9191/stats/live", headers=headers, timeout=3)
-                    if r.status_code == 200:
-                        node_stats[node_name] = {
-                            "status": "Online", 
-                            "mode": "Native", 
-                            "data": r.json(),
-                            "last_seen": int(time.time())
-                        }
-                        continue
-                    elif r.status_code == 401:
-                        node_stats[node_name] = {"status": "Auth Error", "mode": "Native", "last_seen": int(time.time())}
-                        continue
-                except: pass
+def save_nodes(nodes: list):
+    try:
+        with open(CONFIG_FILE, "w") as f:
+            json.dump(nodes, f, indent=2)
+    except IOError as e:
+        log.error(f"Cannot save config: {e}")
 
-                # 2. SNMP Polling (Fallback or alternative)
-                # If node has 'snmp': true, we could use snmpget here.
-                if node.get('snmp'):
-                    # Simplified SNMP check (ping + port check as placeholder for real MIB fetch)
-                    node_stats[node_name] = {"status": "Online", "mode": "SNMP", "data": {"msg": "SNMP Active"}, "last_seen": int(time.time())}
-                else:
-                    node_stats[node_name] = {"status": "Offline", "last_seen": int(time.time())}
-                
-            except Exception as e:
-                node_stats[node_name] = {"status": "Error", "error": str(e), "last_seen": int(time.time())}
-        
-        time.sleep(15)
 
-@app.route('/hub/stats')
-def get_hub_stats():
-    return jsonify(node_stats)
-
-@app.route('/hub/nodes', methods=['GET'])
-def list_nodes():
-    return jsonify(get_nodes())
-
-@app.route('/hub/register', methods=['POST'])
-def register_node():
-    data = request.json
-    if not data or 'name' not in data or 'ip' not in data:
-        return jsonify({"status": "error", "message": "Missing name or ip"}), 400
-    
-    nodes = get_nodes()
-    
-    # Update existing or add new
+def upsert_node(new_node: dict):
+    """Add or update a node by IP address."""
+    nodes = load_nodes()
     updated = False
-    new_nodes = []
+    result = []
     for n in nodes:
-        if n['ip'] == data['ip']:
-            new_nodes.append(data)
+        if n.get("ip") == new_node.get("ip"):
+            result.append(new_node)
             updated = True
         else:
-            new_nodes.append(n)
-    
+            result.append(n)
     if not updated:
-        new_nodes.append(data)
-    
-    save_nodes(new_nodes)
-    return jsonify({"status": "ok", "message": f"Node {data['name']} registered"})
+        result.append(new_node)
+    save_nodes(result)
 
-if __name__ == '__main__':
-    threading.Thread(target=poll_nodes, daemon=True).start()
-    print(f"Amnezia Master Hub v2.1 (Secure) started on port {PORT}")
-    app.run(host='0.0.0.0', port=PORT)
+# ─── Polling thread ──────────────────────────────────────────────────────────
+
+def poll_nodes():
+    """Background thread: query each node's stats API every POLL_SEC seconds."""
+    while True:
+        nodes = load_nodes()
+        for node in nodes:
+            name  = node.get("name", node.get("ip", "unknown"))
+            ip    = node.get("ip", "")
+            token = node.get("token", "")
+
+            if not ip:
+                continue
+
+            result = {
+                "name":      name,
+                "ip":        ip,
+                "last_seen": int(time.time()),
+                "status":    "Offline",
+                "mode":      "—",
+                "data":      {}
+            }
+
+            # 1. Try native HTTP stats collector (port 9191)
+            if REQUESTS_AVAILABLE and token:
+                try:
+                    r = req_lib.get(
+                        f"http://{ip}:9191/stats/live",
+                        headers={"X-Auth-Token": token},
+                        timeout=4
+                    )
+                    if r.status_code == 200:
+                        result["status"] = "Online"
+                        result["mode"]   = "HTTP"
+                        result["data"]   = r.json()
+                    elif r.status_code == 401:
+                        result["status"] = "Auth Error"
+                        result["mode"]   = "HTTP"
+                except Exception:
+                    pass  # Will fall through to SNMP / Offline
+
+            # 2. If still Offline but node has SNMP, mark as SNMP
+            if result["status"] == "Offline" and node.get("snmp"):
+                result["status"] = "SNMP"
+                result["mode"]   = "SNMP"
+
+            with _lock:
+                node_stats[name] = result
+
+        time.sleep(POLL_SEC)
+
+# ─── Routes ──────────────────────────────────────────────────────────────────
+
+@app.route("/hub/health")
+def health():
+    """Liveness probe."""
+    return jsonify({"status": "ok", "uptime": int(time.time())})
+
+
+@app.route("/hub/nodes", methods=["GET"])
+def list_nodes():
+    """Return the list of registered nodes."""
+    return jsonify(load_nodes())
+
+
+@app.route("/hub/stats", methods=["GET"])
+def get_stats():
+    """Return current stats for all nodes."""
+    with _lock:
+        return jsonify(node_stats)
+
+
+@app.route("/hub/register", methods=["POST"])
+def register_node():
+    """Register or update a node. Called automatically by amnezia-cli after deployment."""
+    data = request.get_json(force=True, silent=True)
+    if not data:
+        return jsonify({"status": "error", "message": "Invalid JSON"}), 400
+
+    if not data.get("name") or not data.get("ip"):
+        return jsonify({"status": "error", "message": "Fields 'name' and 'ip' are required"}), 400
+
+    upsert_node(data)
+    log.info(f"Node registered: {data['name']} ({data['ip']})")
+    return jsonify({"status": "ok", "message": f"Node '{data['name']}' registered successfully"})
+
+
+@app.route("/hub/remove", methods=["POST"])
+def remove_node():
+    """Remove a node by IP."""
+    data = request.get_json(force=True, silent=True) or {}
+    ip   = data.get("ip", "")
+    if not ip:
+        return jsonify({"status": "error", "message": "ip is required"}), 400
+
+    nodes = [n for n in load_nodes() if n.get("ip") != ip]
+    save_nodes(nodes)
+
+    name = data.get("name", ip)
+    with _lock:
+        node_stats.pop(name, None)
+
+    return jsonify({"status": "ok", "message": f"Node {ip} removed"})
+
+
+@app.errorhandler(404)
+def not_found(_):
+    return jsonify({"status": "error", "message": "Endpoint not found"}), 404
+
+
+@app.errorhandler(500)
+def server_error(e):
+    log.error(f"Internal error: {e}")
+    return jsonify({"status": "error", "message": "Internal server error"}), 500
+
+# ─── Entry point ─────────────────────────────────────────────────────────────
+
+if __name__ == "__main__":
+    log.info(f"Amnezia Master Hub v3 starting on port {PORT}")
+    log.info(f"Config file: {CONFIG_FILE}")
+    log.info(f"Poll interval: {POLL_SEC}s")
+
+    # Start background poller
+    t = threading.Thread(target=poll_nodes, daemon=True)
+    t.start()
+
+    # Start Flask (production mode via gunicorn is recommended, but Flask works fine for small setups)
+    app.run(host="0.0.0.0", port=PORT, debug=False, use_reloader=False)
