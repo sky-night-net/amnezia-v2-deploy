@@ -140,6 +140,13 @@ LOCALES = {
         "hub_install_prompt": "Установить Master Hub на этот сервер? (y/n)",
         "subnet_prompt": "Подсеть VPN (например, 10.8.0.0/24)",
         "adv_stealth_prompt": "Настроить параметры обфускации (Advanced Stealth)? (y/n)",
+        "h_subnet":      "Внутренний IP-диапазон VPN (обычно 10.8.0.0/24).",
+        "h_jc":          "Количество Junk-пакетов для обфускации.",
+        "h_jmin":        "Мин. размер Junk-пакета.",
+        "h_jmax":        "Макс. размер Junk-пакета.",
+        "h_s1":          "S1: размер первого фрагмента пакета.",
+        "h_s2":          "S2: размер второго фрагмента пакета.",
+        "h_h":           "Уникальный 4-байтовый заголовок.",
     },
     "en": {
         "select_lang":   "Select Language (1: RU, 2: EN)",
@@ -204,6 +211,13 @@ LOCALES = {
         "hub_install_prompt": "Install Master Hub on this server? (y/n)",
         "subnet_prompt": "VPN Subnet (e.g., 10.8.0.0/24)",
         "adv_stealth_prompt": "Configure Advanced Stealth parameters? (y/n)",
+        "h_subnet":      "Internal VPN IP range (usually 10.8.0.0/24).",
+        "h_jc":          "Number of Junk packets for obfuscation.",
+        "h_jmin":        "Min size of Junk packet.",
+        "h_jmax":        "Max size of Junk packet.",
+        "h_s1":          "S1: size of the first packet fragment.",
+        "h_s2":          "S2: size of the second packet fragment.",
+        "h_h":           "Unique 4-byte header.",
     }
 }
 
@@ -232,8 +246,10 @@ def err(text):
 def separator():
     print(f"  {DIM}{'─' * 48}{RESET}")
 
-def get_input(prompt, default="", required=False):
+def get_input(prompt, default="", help_text="", required=False):
     """Safe input that works both interactively and via curl|bash."""
+    if help_text:
+        print(f"  {DIM}ℹ {help_text}{RESET}")
     hint = f" [{default}]" if default else ""
     full_prompt = f"  {CYAN}➤{RESET} {BOLD}{prompt}{hint}{RESET}: "
     while True:
@@ -785,13 +801,20 @@ def run_cli():
             web_pub_ans = get_input(L["web_public_prompt"], "n")
             public_web = (web_pub_ans.lower() == "y")
             
-            vpn_subnet = get_input(L["subnet_prompt"], "10.8.0.0/24")
+            vpn_subnet = get_input(L["subnet_prompt"], "10.8.0.0/24", L["h_subnet"])
             
             stealth_dict = DEFAULT_STEALTH.copy()
             adv_ans = get_input(L["adv_stealth_prompt"], "n")
             if adv_ans.lower() == "y":
-                for k in stealth_dict:
-                    stealth_dict[k] = get_input(f"  - {k}", stealth_dict[k])
+                stealth_dict["JC"]   = get_input("  JC",   stealth_dict["JC"],   L["h_jc"])
+                stealth_dict["JMIN"] = get_input("  JMIN", stealth_dict["JMIN"], L["h_jmin"])
+                stealth_dict["JMAX"] = get_input("  JMAX", stealth_dict["JMAX"], L["h_jmax"])
+                stealth_dict["S1"]   = get_input("  S1",   stealth_dict["S1"],   L["h_s1"])
+                stealth_dict["S2"]   = get_input("  S2",   stealth_dict["S2"],   L["h_s2"])
+                stealth_dict["H1"]   = get_input("  H1",   stealth_dict["H1"],   L["h_h"])
+                stealth_dict["H2"]   = get_input("  H2",   stealth_dict["H2"],   L["h_h"])
+                stealth_dict["H3"]   = get_input("  H3",   stealth_dict["H3"],   L["h_h"])
+                stealth_dict["H4"]   = get_input("  H4",   stealth_dict["H4"],   L["h_h"])
 
             snmp_ans = get_input(L["snmp_prompt"],     "n")
             
